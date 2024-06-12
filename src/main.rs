@@ -10,14 +10,27 @@ fn main() -> Result<()> {
     cpu.load(&rom);
     cpu.mirror = 0x400;
 
-    for _ in 0..1575 {
+    // at this point of instruction. shit is wrong. 1546
+    for _ in 0..1547 {
         let pc = cpu.pc;
         cpu.step();
         println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
     }
 
     // dbg!(&cpu.history);
-    // dbg!(cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp);
+    dbg!(
+        cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
+        cpu.z, cpu.s
+    );
+
+    let pc = cpu.pc;
+    cpu.step();
+    println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
+
+    dbg!(
+        cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
+        cpu.z, cpu.s
+    );
 
     Ok(())
 }
@@ -131,6 +144,7 @@ impl Cpu8080 {
         self.read(self.pc + 1) as u16 | (self.read(self.pc + 2) as u16) << 8
     }
 
+    // TODO: this is probably wrong
     fn pop(&mut self) -> u16 {
         let value = self.read(self.sp) as u16 | (self.read(self.sp + 1) as u16) << 8;
         self.sp += 2;
@@ -1057,10 +1071,9 @@ impl Cpu8080 {
             }
             0xc0 => {
                 if !self.z {
-                    // TODO: this is probably not a good idea
                     self.pc = self.pop().wrapping_sub(1);
-                    self.history.push("RNZ".to_string());
                 }
+                self.history.push("RNZ".to_string());
             }
             0xc1 => {
                 let bc = self.pop();
@@ -1069,10 +1082,11 @@ impl Cpu8080 {
             }
             0xc2 => {
                 let addr = self.next_memory();
-                if !self.z {
-                    self.pc = addr.wrapping_sub(1);
-                    self.history.push(format!("JNZ {:#06x}", addr));
-                }
+                self.pc = match self.z {
+                    false => addr.wrapping_sub(1),
+                    true => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JNZ {:#06x}", addr));
             }
             0xc3 => {
                 let addr = self.next_memory();
@@ -1083,8 +1097,10 @@ impl Cpu8080 {
                 let addr = self.next_memory();
                 if !self.z {
                     self.call(addr);
-                    self.history.push(format!("CNZ {:#06x}", addr));
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
                 }
+                self.history.push(format!("CNZ {:#06x}", addr));
             }
             0xc5 => {
                 self.push(self.bc());
@@ -1103,20 +1119,20 @@ impl Cpu8080 {
             0xc8 => {
                 if self.z {
                     self.pc = self.pop().wrapping_sub(1);
-                    self.history.push("RZ".to_string());
                 }
+                self.history.push("RZ".to_string());
             }
             0xc9 => {
                 self.pc = self.pop().wrapping_sub(1);
-                // TODO: this shit kinda broken
                 self.history.push("RET".to_string());
             }
             0xca => {
                 let addr = self.next_memory();
-                if self.z {
-                    self.pc = addr.wrapping_sub(1);
-                    self.history.push(format!("JZ {:#06x}", addr));
-                }
+                self.pc = match self.z {
+                    true => addr.wrapping_sub(1),
+                    false => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JZ {:#06x}", addr));
             }
             0xcb => self
                 .history
@@ -1125,8 +1141,10 @@ impl Cpu8080 {
                 let addr = self.next_memory();
                 if self.z {
                     self.call(addr);
-                    self.history.push(format!("CZ {:#06x}", addr));
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
                 }
+                self.history.push(format!("CZ {:#06x}", addr));
             }
             0xcd => {
                 let addr = self.next_memory();
