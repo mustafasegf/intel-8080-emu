@@ -69,7 +69,7 @@ struct Cpu8080 {
     /// auxiliary carry
     pub ac: bool,
 
-    pub int_enable: bool,
+    pub interrupt: bool,
 
     pub halt: bool,
 
@@ -105,7 +105,7 @@ impl Cpu8080 {
             p: false,
             cy: false,
             ac: false,
-            int_enable: false,
+            interrupt: false,
             halt: false,
             memory: [0; 0x10000],
             mirror: 0,
@@ -1158,9 +1158,301 @@ impl Cpu8080 {
                 self.call(addr);
                 self.history.push(format!("CALL {:#06x}", addr));
             }
-            _ => {
-                self.history
-                    .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc)));
+            0xce => {
+                let value = self.read(self.pc + 1);
+                (self.a, self.cy) = self.a.overflowing_add(value.wrapping_add(self.cy as u8));
+                flag!(self, self.a);
+                self.history.push(format!("ACI {:#04x}", value));
+            }
+            0xcf => {
+                self.call(0x08);
+                self.history.push("RST 1".to_string());
+            }
+            0xd0 => {
+                if !self.cy {
+                    self.pc = self.pop().wrapping_sub(1);
+                }
+                self.history.push("RNC".to_string());
+            }
+            0xd1 => {
+                let de = self.pop();
+                self.set_de(de);
+                self.history.push("POP D".to_string());
+            }
+            0xd2 => {
+                let addr = self.next_memory();
+                self.pc = match self.cy {
+                    false => addr.wrapping_sub(1),
+                    true => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JNC {:#06x}", addr));
+            }
+            0xd3 => {
+                let port = self.read(self.pc + 1);
+                self.pc = self.pc.wrapping_add(1);
+                self.history.push(format!("OUT {:#04x}", port));
+            }
+            0xd4 => {
+                let addr = self.next_memory();
+                if !self.cy {
+                    self.call(addr);
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
+                }
+                self.history.push(format!("CNC {:#06x}", addr));
+            }
+            0xd5 => {
+                self.push(self.de());
+                self.history.push("PUSH D".to_string());
+            }
+            0xd6 => {
+                let value = self.read(self.pc + 1);
+                (self.a, self.cy) = self.a.overflowing_sub(value);
+                flag!(self, self.a);
+                self.history.push(format!("SUI {:#04x}", value));
+            }
+            0xd7 => {
+                self.call(0x10);
+                self.history.push("RST 2".to_string());
+            }
+            0xd8 => {
+                if self.cy {
+                    self.pc = self.pop().wrapping_sub(1);
+                }
+                self.history.push("RC".to_string());
+            }
+            0xd9 => self
+                .history
+                .push(format!("Invalid: {:#04x}", self.read(self.pc))),
+            0xda => {
+                let addr = self.next_memory();
+                self.pc = match self.cy {
+                    true => addr.wrapping_sub(1),
+                    false => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JC {:#06x}", addr));
+            }
+            0xdb => {
+                let port = self.read(self.pc + 1);
+                self.pc = self.pc.wrapping_add(1);
+                self.history.push(format!("IN {:#04x}", port));
+            }
+            0xdc => {
+                let addr = self.next_memory();
+                if self.cy {
+                    self.call(addr);
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
+                }
+                self.history.push(format!("CC {:#06x}", addr));
+            }
+            0xdd => self
+                .history
+                .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
+            0xde => {
+                let value = self.read(self.pc + 1);
+                (self.a, self.cy) = self.a.overflowing_sub(value.wrapping_add(self.cy as u8));
+                flag!(self, self.a);
+                self.history.push(format!("SBI {:#04x}", value));
+            }
+            0xdf => {
+                self.call(0x18);
+                self.history.push("RST 3".to_string());
+            }
+            0xe0 => {
+                if !self.p {
+                    self.pc = self.pop().wrapping_sub(1);
+                }
+                self.history.push("RPO".to_string());
+            }
+            0xe1 => {
+                let hl = self.pop();
+                self.set_hl(hl);
+                self.history.push("POP H".to_string());
+            }
+            0xe2 => {
+                let addr = self.next_memory();
+                self.pc = match self.p {
+                    false => addr.wrapping_sub(1),
+                    true => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JPO {:#06x}", addr));
+            }
+            0xe3 => {
+                let hl = self.pop();
+                self.push(self.hl());
+                self.set_hl(hl);
+                self.history.push("XTHL".to_string());
+            }
+            0xe4 => {
+                let addr = self.next_memory();
+                if !self.p {
+                    self.call(addr);
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
+                }
+                self.history.push(format!("CPO {:#06x}", addr));
+            }
+            0xe5 => {
+                self.push(self.hl());
+                self.history.push("PUSH H".to_string());
+            }
+            0xe6 => {
+                let value = self.read(self.pc + 1);
+                self.a &= value;
+                flag!(self, self.a);
+                self.history.push(format!("ANI {:#04x}", value));
+            }
+            0xe7 => {
+                self.call(0x20);
+                self.history.push("RST 4".to_string());
+            }
+            0xe8 => {
+                if self.p {
+                    self.pc = self.pop().wrapping_sub(1);
+                }
+                self.history.push("RPE".to_string());
+            }
+            0xe9 => {
+                self.pc = self.hl();
+                self.history.push("PCHL".to_string());
+            }
+            0xea => {
+                let addr = self.next_memory();
+                self.pc = match self.p {
+                    true => addr.wrapping_sub(1),
+                    false => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JPE {:#06x}", addr));
+            }
+            0xeb => {
+                let de = self.de();
+                self.set_de(self.hl());
+                self.set_hl(de);
+                self.history.push("XCHG".to_string());
+            }
+            0xec => {
+                let addr = self.next_memory();
+                if self.p {
+                    self.call(addr);
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
+                }
+                self.history.push(format!("CPE {:#06x}", addr));
+            }
+            0xed => self
+                .history
+                .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
+            0xee => {
+                let value = self.read(self.pc + 1);
+                self.a ^= value;
+                flag!(self, self.a);
+                self.history.push(format!("XRI {:#04x}", value));
+            }
+            0xef => {
+                self.call(0x28);
+                self.history.push("RST 5".to_string());
+            }
+            0xf0 => {
+                if !self.s {
+                    self.pc = self.pop().wrapping_sub(1);
+                }
+                self.history.push("RP".to_string());
+            }
+            0xf1 => {
+                let value = self.pop();
+                self.s = value & (1 << 7) != 0;
+                self.z = value & (1 << 6) != 0;
+                self.ac = value & (1 << 4) != 0;
+                self.p = value & (1 << 2) != 0;
+                self.cy = value & 1 != 0;
+                self.history.push("POP PSW".to_string());
+            }
+            0xf2 => {
+                let addr = self.next_memory();
+                self.pc = match self.s {
+                    false => addr.wrapping_sub(1),
+                    true => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JP {:#06x}", addr));
+            }
+            0xf3 => {
+                self.interrupt = false;
+                self.history.push("DI".to_string());
+            }
+            0xf4 => {
+                let addr = self.next_memory();
+                if !self.s {
+                    self.call(addr);
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
+                }
+                self.history.push(format!("CP {:#06x}", addr));
+            }
+            0xf5 => {
+                let mut addr = self.a as u16;
+                addr |= (self.s as u16) << 7;
+                addr |= (self.z as u16) << 6;
+                addr |= (self.ac as u16) << 4;
+                addr |= (self.p as u16) << 2;
+                addr |= self.cy as u16;
+                self.push(addr);
+
+                self.history.push("PUSH PSW".to_string());
+            }
+            0xf6 => {
+                let value = self.read(self.pc + 1);
+                self.a |= value;
+                flag!(self, self.a);
+                self.history.push(format!("ORI {:#04x}", value));
+            }
+            0xf7 => {
+                self.call(0x30);
+                self.history.push("RST 6".to_string());
+            }
+            0xf8 => {
+                if self.s {
+                    self.pc = self.pop().wrapping_sub(1);
+                }
+                self.history.push("RM".to_string());
+            }
+            0xf9 => {
+                self.sp = self.hl();
+                self.history.push("SPHL".to_string());
+            }
+            0xfa => {
+                let addr = self.next_memory();
+                self.pc = match self.s {
+                    true => addr.wrapping_sub(1),
+                    false => self.pc.wrapping_add(2),
+                };
+                self.history.push(format!("JM {:#06x}", addr));
+            }
+            0xfb => {
+                self.interrupt = true;
+                self.history.push("EI".to_string());
+            }
+            0xfc => {
+                let addr = self.next_memory();
+                if self.s {
+                    self.call(addr);
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
+                }
+                self.history.push(format!("CM {:#06x}", addr));
+            }
+            0xfd => self
+                .history
+                .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
+            0xfe => {
+                let value = self.read(self.pc + 1);
+                (self.a, self.cy) = self.a.overflowing_sub(value);
+                flag!(self, self.a);
+                self.history.push(format!("CPI {:#04x}", value));
+            }
+            0xff => {
+                self.call(0x38);
+                self.history.push("RST 7".to_string());
             }
         }
         self.pc = self.pc.wrapping_add(1);
