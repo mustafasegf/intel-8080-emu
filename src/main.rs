@@ -10,27 +10,35 @@ fn main() -> Result<()> {
     cpu.load(&rom);
     cpu.mirror = 0x400;
 
-    // at this point of instruction. shit is wrong. 1546
-    for _ in 0..1547 {
+    // for i in 0..0x4000 / 0x10 {
+    //     print!("{:#06x}  ", i * 0x10);
+    //     for mem in cpu.memory.iter().skip(i * 0x10).take(0x10) {
+    //         print!("{:#04x} ", mem);
+    //     }
+    //     println!();
+    // }
+
+    for _ in 0..0x1000 {
         let pc = cpu.pc;
         cpu.step();
         println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
     }
 
-    // dbg!(&cpu.history);
     dbg!(
         cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
         cpu.z, cpu.s
     );
 
-    let pc = cpu.pc;
-    cpu.step();
-    println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
-
-    dbg!(
-        cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
-        cpu.z, cpu.s
-    );
+    // for _ in 0..2 {
+    //     let pc = cpu.pc;
+    //     cpu.step();
+    //     println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
+    // }
+    //
+    // dbg!(
+    //     cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
+    //     cpu.z, cpu.s
+    // );
 
     Ok(())
 }
@@ -144,9 +152,8 @@ impl Cpu8080 {
         self.read(self.pc + 1) as u16 | (self.read(self.pc + 2) as u16) << 8
     }
 
-    // TODO: this is probably wrong
     fn pop(&mut self) -> u16 {
-        let value = self.read(self.sp) as u16 | (self.read(self.sp + 1) as u16) << 8;
+        let value = self.read(self.sp + 1) as u16 | (self.read(self.sp) as u16) << 8;
         self.sp += 2;
         value
     }
@@ -1123,7 +1130,7 @@ impl Cpu8080 {
                 self.history.push("RZ".to_string());
             }
             0xc9 => {
-                self.pc = self.pop().wrapping_sub(1);
+                self.pc = self.pop().wrapping_add(2);
                 self.history.push("RET".to_string());
             }
             0xca => {
