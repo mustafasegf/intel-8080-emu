@@ -32,18 +32,30 @@ async fn main() -> Result<()> {
     cpu.load(&rom);
     cpu.mirror = 0x400;
 
-    for _ in 0..80_000 {
-        let pc = cpu.pc;
-        cpu.step();
-        println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
-    }
+    // for _ in 0..80_000 {
+    //     let pc = cpu.pc;
+    //     cpu.step();
+    //     println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
+    // }
 
+    let mut cnt = 0;
     loop {
+        cnt += 1;
+        if cnt == 80_000 {
+            break;
+        }
+        let delta = get_frame_time();
+
+        for i in 0..(2_000_000. * delta) as usize {
+            let pc = cpu.pc;
+            cpu.step();
+            println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
+        }
+
         clear_background(BLACK);
 
         // for space invader, the vram starts from 0x2400 until 0x3fff
         // the color is monocrome so i need to bitshift to get 8 pixel
-
         for mem_pointer in 0x2400..0x4000 {
             // draw 8 pixel at a time
             for offset in 0..8 {
@@ -71,12 +83,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        // draw_rectangle(0., 0., 100., 200., RED);
-
         next_frame().await;
-        let mut buf = vec![];
-        std::io::stdin().read(&mut buf);
-        break;
+        // let mut buf = vec![];
+        // std::io::stdin().read(&mut buf);
+        // break;
     }
 
     // for i in 0..0x4000 / 0x10 {
