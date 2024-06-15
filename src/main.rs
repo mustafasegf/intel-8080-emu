@@ -1,5 +1,5 @@
 #![allow(unused)]
-use std::io::{self, Read};
+use std::io::{self, BufRead, Read};
 
 use anyhow::Result;
 
@@ -16,8 +16,6 @@ fn window_conf() -> Conf {
         window_resizable: false,
         window_width: WIDTH,
         window_height: HEIGHT,
-        // window_width: HEIGHT,
-        // window_height: WIDTH,
         ..Default::default()
     }
 }
@@ -30,20 +28,42 @@ async fn main() -> Result<()> {
 
     let mut cpu = Cpu8080::new();
     cpu.load(&rom);
-    cpu.mirror = 0x400;
-
-    // for _ in 0..80_000 {
+    // cpu.mirror = 0x400;
+    //
+    // for _ in 0..40_500 {
     //     let pc = cpu.pc;
     //     cpu.step();
     //     println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
     // }
+    //
+    // dbg!(
+    //     cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
+    //     cpu.z, cpu.s
+    // );
+    //
+    // let stdin = io::stdin();
+    // loop {
+    //     let mut buffer = String::new();
+    //     stdin.lock().read_line(&mut buffer)?;
+    //     if buffer.as_str() == "q\n" {
+    //         break;
+    //     }
+    //
+    //     if buffer.as_str() == "d\n" {
+    //         dbg!(
+    //             cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p,
+    //             cpu.ac, cpu.z, cpu.s
+    //         );
+    //         continue;
+    //     }
+    //
+    //     let pc = cpu.pc;
+    //     cpu.step();
+    //     println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
+    // }
+    // return Ok(());
 
-    let mut cnt = 0;
     loop {
-        cnt += 1;
-        if cnt == 80_000 {
-            break;
-        }
         let delta = get_frame_time();
 
         for i in 0..(2_000_000. * delta) as usize {
@@ -84,9 +104,6 @@ async fn main() -> Result<()> {
         }
 
         next_frame().await;
-        // let mut buf = vec![];
-        // std::io::stdin().read(&mut buf);
-        // break;
     }
 
     // for i in 0..0x4000 / 0x10 {
@@ -1191,6 +1208,7 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 (self.a, self.cy) = self.a.overflowing_add(value);
                 flag!(self, self.a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("ADI {:#04x}", value));
             }
             0xc7 => {
@@ -1236,6 +1254,7 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 (self.a, self.cy) = self.a.overflowing_add(value.wrapping_add(self.cy as u8));
                 flag!(self, self.a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("ACI {:#04x}", value));
             }
             0xcf => {
@@ -1283,6 +1302,7 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 (self.a, self.cy) = self.a.overflowing_sub(value);
                 flag!(self, self.a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("SUI {:#04x}", value));
             }
             0xd7 => {
@@ -1327,6 +1347,7 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 (self.a, self.cy) = self.a.overflowing_sub(value.wrapping_add(self.cy as u8));
                 flag!(self, self.a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("SBI {:#04x}", value));
             }
             0xdf => {
@@ -1375,6 +1396,7 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 self.a &= value;
                 flag!(self, self.a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("ANI {:#04x}", value));
             }
             0xe7 => {
@@ -1421,6 +1443,7 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 self.a ^= value;
                 flag!(self, self.a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("XRI {:#04x}", value));
             }
             0xef => {
@@ -1478,6 +1501,7 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 self.a |= value;
                 flag!(self, self.a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("ORI {:#04x}", value));
             }
             0xf7 => {
@@ -1520,8 +1544,10 @@ impl Cpu8080 {
                 .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
             0xfe => {
                 let value = self.read(self.pc + 1);
-                (self.a, self.cy) = self.a.overflowing_sub(value);
-                flag!(self, self.a);
+                let mut a = 0;
+                (a, self.cy) = self.a.overflowing_sub(value);
+                flag!(self, a);
+                self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("CPI {:#04x}", value));
             }
             0xff => {
