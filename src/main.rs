@@ -1,7 +1,26 @@
 #![allow(unused)]
+use std::io::{self, Read};
+
 use anyhow::Result;
 
-fn main() -> Result<()> {
+use macroquad::prelude::*;
+
+const PIXEL_SIZE: i32 = 3;
+
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "8080 Emulator".to_owned(),
+        fullscreen: false,
+        window_resizable: false,
+        window_width: 256 * PIXEL_SIZE,
+        window_height: 224 * PIXEL_SIZE,
+
+        ..Default::default()
+    }
+}
+
+#[macroquad::main(window_conf)]
+async fn main() -> Result<()> {
     println!("8080 emulator");
 
     let rom = std::fs::read("./rom/space-invaders/invaders").expect("Unable to read file");
@@ -10,6 +29,52 @@ fn main() -> Result<()> {
     cpu.load(&rom);
     cpu.mirror = 0x400;
 
+    for _ in 0..80_000 {
+        let pc = cpu.pc;
+        cpu.step();
+        println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
+    }
+
+    loop {
+        clear_background(BLACK);
+
+        // for space invader, the vram starts from 0x2400 until 0x3fff
+        // the color is monocrome so i need to bitshift to get 8 pixel
+
+        for mem_pointer in 0x2400..0x4000 {
+            // draw 8 pixel at a time
+            //  0b00110001
+
+            for offset in 0..8 {
+                let color = match (cpu.memory[mem_pointer]) & (1 << offset) > 0 {
+                    true => WHITE,
+                    _ => BLACK,
+                };
+
+                let x =
+                    ((((mem_pointer - 0x2400) * 8 + offset) % 256) * PIXEL_SIZE as usize) as f32;
+                let y =
+                    ((((mem_pointer - 0x2400) * 8 + offset) / 256) * PIXEL_SIZE as usize) as f32;
+                let w = PIXEL_SIZE as f32;
+                let h = PIXEL_SIZE as f32;
+                if color == WHITE {
+                    println!(
+                        "{mem_pointer:#06x} {x} {y} {offset} {:#010b}",
+                        cpu.memory[mem_pointer]
+                    );
+                }
+                draw_rectangle(x, y, w, h, color)
+            }
+        }
+
+        // draw_rectangle(0., 0., 100., 200., RED);
+
+        next_frame().await;
+        let mut buf = vec![];
+        std::io::stdin().read(&mut buf);
+        break;
+    }
+
     // for i in 0..0x4000 / 0x10 {
     //     print!("{:#06x}  ", i * 0x10);
     //     for mem in cpu.memory.iter().skip(i * 0x10).take(0x10) {
@@ -17,18 +82,12 @@ fn main() -> Result<()> {
     //     }
     //     println!();
     // }
-
-    for _ in 0..0x1000 {
-        let pc = cpu.pc;
-        cpu.step();
-        println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
-    }
-
-    dbg!(
-        cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
-        cpu.z, cpu.s
-    );
-
+    //
+    // dbg!(
+    //     cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
+    //     cpu.z, cpu.s
+    // );
+    //
     // for _ in 0..2 {
     //     let pc = cpu.pc;
     //     cpu.step();
@@ -74,6 +133,7 @@ struct Cpu8080 {
     pub halt: bool,
 
     pub memory: [u8; 0x10000],
+    /// special for space invaders
     pub mirror: u16,
 
     pub history: Vec<String>,
