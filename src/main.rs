@@ -6,15 +6,18 @@ use anyhow::Result;
 use macroquad::prelude::*;
 
 const PIXEL_SIZE: i32 = 3;
+const WIDTH: i32 = 224 * PIXEL_SIZE;
+const HEIGHT: i32 = 256 * PIXEL_SIZE;
 
 fn window_conf() -> Conf {
     Conf {
         window_title: "8080 Emulator".to_owned(),
         fullscreen: false,
         window_resizable: false,
-        window_width: 256 * PIXEL_SIZE,
-        window_height: 224 * PIXEL_SIZE,
-
+        window_width: WIDTH,
+        window_height: HEIGHT,
+        // window_width: HEIGHT,
+        // window_height: WIDTH,
         ..Default::default()
     }
 }
@@ -43,8 +46,6 @@ async fn main() -> Result<()> {
 
         for mem_pointer in 0x2400..0x4000 {
             // draw 8 pixel at a time
-            //  0b00110001
-
             for offset in 0..8 {
                 let color = match (cpu.memory[mem_pointer]) & (1 << offset) > 0 {
                     true => WHITE,
@@ -55,15 +56,18 @@ async fn main() -> Result<()> {
                     ((((mem_pointer - 0x2400) * 8 + offset) % 256) * PIXEL_SIZE as usize) as f32;
                 let y =
                     ((((mem_pointer - 0x2400) * 8 + offset) / 256) * PIXEL_SIZE as usize) as f32;
+
                 let w = PIXEL_SIZE as f32;
                 let h = PIXEL_SIZE as f32;
-                if color == WHITE {
-                    println!(
-                        "{mem_pointer:#06x} {x} {y} {offset} {:#010b}",
-                        cpu.memory[mem_pointer]
-                    );
-                }
-                draw_rectangle(x, y, w, h, color)
+
+                let x_center = WIDTH as f32 / 2.;
+                let y_center = HEIGHT as f32 / 2.;
+
+                // -90 deg rotation since the memory buffer is rotated
+                let rot_x = (y - x_center) + x_center;
+                let rot_y = -(x - y_center) + y_center;
+
+                draw_rectangle(rot_x, rot_y, w, h, color)
             }
         }
 
