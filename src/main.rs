@@ -266,10 +266,10 @@ impl Cpu8080 {
         match self.read(self.pc) {
             0x00 => self.history.push("NOP".to_string()),
             0x01 => {
-                self.set_bc(self.next_memory());
+                let addr = self.next_memory();
+                self.set_bc(addr);
                 self.pc = self.pc.wrapping_add(2);
-                self.history
-                    .push(format!("LXI B, {:#04x}{:#04x}", self.b, self.c));
+                self.history.push(format!("LXI B, {:#06x}", addr));
             }
             0x02 => {
                 self.memory[self.bc() as usize] = self.a;
@@ -340,10 +340,10 @@ impl Cpu8080 {
                 .history
                 .push(format!("Invalid: {:#04x}", self.read(self.pc))),
             0x11 => {
-                self.set_de(self.next_memory());
+                let addr = self.next_memory();
+                self.set_de(addr);
                 self.pc = self.pc.wrapping_add(2);
-                self.history
-                    .push(format!("LXI D, {:#04x}{:#04x}", self.d, self.e));
+                self.history.push(format!("LXI D, {:#06x}", addr));
             }
             0x12 => {
                 self.memory[self.de() as usize] = self.a;
@@ -418,10 +418,10 @@ impl Cpu8080 {
                 .history
                 .push(format!("Invalid: {:#04x}", self.read(self.pc))),
             0x21 => {
-                self.set_hl(self.next_memory());
+                let addr = self.next_memory();
+                self.set_hl(addr);
                 self.pc = self.pc.wrapping_add(2);
-                self.history
-                    .push(format!("LXI H, {:#04x}{:#04x}", self.h, self.l));
+                self.history.push(format!("LXI H, {:#06x}", addr));
             }
             0x22 => {
                 let addr = self.next_memory();
@@ -1235,7 +1235,7 @@ impl Cpu8080 {
             }
             0xcb => self
                 .history
-                .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
+                .push(format!("Invalid: {:#04x}", self.read(self.pc))),
             0xcc => {
                 let addr = self.next_memory();
                 if self.z {
@@ -1342,7 +1342,7 @@ impl Cpu8080 {
             }
             0xdd => self
                 .history
-                .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
+                .push(format!("Invalid: {:#04x}", self.read(self.pc))),
             0xde => {
                 let value = self.read(self.pc + 1);
                 (self.a, self.cy) = self.a.overflowing_sub(value.wrapping_add(self.cy as u8));
@@ -1438,7 +1438,7 @@ impl Cpu8080 {
             }
             0xed => self
                 .history
-                .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
+                .push(format!("Invalid: {:#04x}", self.read(self.pc))),
             0xee => {
                 let value = self.read(self.pc + 1);
                 self.a ^= value;
@@ -1541,7 +1541,7 @@ impl Cpu8080 {
             }
             0xfd => self
                 .history
-                .push(format!("Unimplemented opcode: {:#04x}", self.read(self.pc))),
+                .push(format!("Invalid: {:#04x}", self.read(self.pc))),
             0xfe => {
                 let value = self.read(self.pc + 1);
                 let mut a = 0;
