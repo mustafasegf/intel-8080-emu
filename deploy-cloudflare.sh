@@ -16,6 +16,7 @@ mkdir -p dist/js
 cp index.html dist/
 cp js/mq_js_bundle.js dist/js/
 cp target/wasm32-unknown-unknown/release/intel-8080-emu.wasm dist/
+cp favicon-16.png favicon-32.png dist/
 
 # Create _headers file for proper MIME types
 cat >dist/_headers <<'EOF'
