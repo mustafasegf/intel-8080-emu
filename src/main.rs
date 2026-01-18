@@ -8,16 +8,17 @@ const PIXEL_SIZE: i32 = 3;
 // The monitor is rotated 90 degrees CCW in the cabinet, so:
 // - Frame buffer width (256) becomes screen height
 // - Frame buffer height (224) becomes screen width
-const WIDTH: i32 = 224 * PIXEL_SIZE; // 672
-const HEIGHT: i32 = 256 * PIXEL_SIZE; // 768
+const GAME_WIDTH: i32 = 224 * PIXEL_SIZE; // 672
+const GAME_HEIGHT: i32 = 256 * PIXEL_SIZE; // 768
+const DEBUG_PANEL_WIDTH: i32 = 400;
 
 fn window_conf() -> Conf {
     Conf {
         window_title: "Space Invaders - 8080 Emulator".to_owned(),
         fullscreen: false,
-        window_resizable: false,
-        window_width: WIDTH,
-        window_height: HEIGHT,
+        window_resizable: true,
+        window_width: GAME_WIDTH + DEBUG_PANEL_WIDTH,
+        window_height: GAME_HEIGHT,
         ..Default::default()
     }
 }
@@ -274,31 +275,73 @@ async fn main() -> Result<()> {
     let mut next_interrupt: u8 = 0xcf; // Alternate between 0xCF and 0xD7
     let mut cycle_count: u64 = 0;
 
+    // Emulator control state
+    let mut paused = false;
+    let mut step_once = false;
+    let mut fire_vblank = false;
+    let mut fire_half_vblank = false;
+
     loop {
         // Update input state from keyboard
         let any_key = io.update_inputs();
 
-        // Run CPU until we've executed enough cycles for half a frame
-        while cycle_count < CYCLES_PER_HALF_FRAME {
-            if !cpu.halt {
-                cpu.step(&mut io);
-                cycle_count += 4; // Approximate: average ~4 cycles per instruction
+        // Keyboard shortcuts for emulator control
+        if is_key_pressed(KeyCode::P) {
+            paused = !paused;
+        }
+        if is_key_pressed(KeyCode::N) && paused {
+            step_once = true;
+        }
+        if is_key_pressed(KeyCode::R) {
+            // Reset
+            cpu = Cpu8080::new();
+            cpu.load(&rom);
+            io = SpaceInvadersIO::new();
+            next_interrupt = 0xcf;
+            cycle_count = 0;
+            paused = false;
+        }
+
+        // Only run emulation if not paused (or stepping)
+        if !paused || step_once {
+            if step_once {
+                // Single step: execute one instruction
+                if !cpu.halt {
+                    cpu.step(&mut io);
+                }
+                step_once = false;
             } else {
-                // If halted, just count cycles
-                cycle_count += 4;
+                // Run CPU until we've executed enough cycles for half a frame
+                while cycle_count < CYCLES_PER_HALF_FRAME {
+                    if !cpu.halt {
+                        cpu.step(&mut io);
+                        cycle_count += 4; // Approximate: average ~4 cycles per instruction
+                    } else {
+                        // If halted, just count cycles
+                        cycle_count += 4;
+                    }
+                }
+                cycle_count -= CYCLES_PER_HALF_FRAME;
+
+                // Fire interrupt - it will be queued and processed when interrupts are enabled
+                cpu.generate_interrupt(next_interrupt);
+                // Alternate between RST 8 (0xCF) and RST 10 (0xD7)
+                next_interrupt = if next_interrupt == 0xcf { 0xd7 } else { 0xcf };
             }
         }
-        cycle_count -= CYCLES_PER_HALF_FRAME;
 
-        // Fire interrupt - it will be queued and processed when interrupts are enabled
-        cpu.generate_interrupt(next_interrupt);
-        // Alternate between RST 8 (0xCF) and RST 10 (0xD7)
-        next_interrupt = if next_interrupt == 0xcf { 0xd7 } else { 0xcf };
+        // Handle manual interrupt buttons (even when paused)
+        if fire_vblank {
+            cpu.generate_interrupt(0xd7); // RST 10 - vblank
+            fire_vblank = false;
+        }
+        if fire_half_vblank {
+            cpu.generate_interrupt(0xcf); // RST 8 - half vblank
+            fire_half_vblank = false;
+        }
 
-        // Only render and wait for frame on vblank (0xD7)
-        if next_interrupt == 0xcf {
-            // Just finished vblank interrupt, now render
-
+        // Render every frame (not just on vblank) so UI is responsive
+        {
             // Render the screen
             clear_background(BLACK);
 
@@ -344,47 +387,296 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Debug: show input state at bottom of screen
-            let debug_y = HEIGHT as f32 - 20.0;
-            draw_text(
-                &format!("P1:{:02X} P2:{:02X}", io.port1, io.port2),
-                10.0,
-                debug_y,
-                20.0,
-                GREEN,
-            );
+            // Only draw debug panel if screen is wide enough (desktop mode)
+            let show_debug_panel = screen_width() > GAME_WIDTH as f32 + 100.0;
 
-            // Show key press indicator
-            if any_key {
-                draw_text("KEY!", WIDTH as f32 - 60.0, debug_y, 20.0, RED);
-            }
+            if show_debug_panel {
+                // Draw debug panel on the right side
+                let panel_x = GAME_WIDTH as f32;
+                let panel_bg = Color::new(0.1, 0.1, 0.15, 1.0);
+                draw_rectangle(
+                    panel_x,
+                    0.0,
+                    DEBUG_PANEL_WIDTH as f32,
+                    GAME_HEIGHT as f32,
+                    panel_bg,
+                );
 
-            // Show credit count from memory (for debugging)
-            // Credit count is at 0x20EB in Space Invaders
-            let credits = cpu.memory[0x20eb];
-            draw_text(&format!("CR:{}", credits), 150.0, debug_y, 20.0, YELLOW);
+                // Draw separator line
+                draw_line(panel_x, 0.0, panel_x, GAME_HEIGHT as f32, 2.0, GREEN);
 
-            // Show PC and interrupt state
-            draw_text(
-                &format!(
-                    "PC:{:04X} SP:{:04X} INT:{}",
-                    cpu.pc,
-                    cpu.sp,
-                    if cpu.interrupt { "ON" } else { "OFF" }
-                ),
-                220.0,
-                debug_y,
-                20.0,
-                SKYBLUE,
-            );
+                let font_size = 16.0;
+                let line_height = 20.0;
+                let mut y = 25.0;
+                let x = panel_x + 10.0;
+                let label_color = Color::new(0.6, 0.6, 0.6, 1.0);
+                let value_color = GREEN;
+                let header_color = Color::new(0.0, 1.0, 0.5, 1.0);
 
-            // Show last instruction
-            if let Some(last) = cpu.history.last() {
-                draw_text(last, 450.0, debug_y, 16.0, ORANGE);
-            }
+                // Title
+                draw_text("CPU STATE", x, y, 20.0, header_color);
+                y += line_height + 10.0;
+
+                // Program Counter & Stack Pointer
+                draw_text("PC:", x, y, font_size, label_color);
+                draw_text(
+                    &format!("{:04X}", cpu.pc),
+                    x + 40.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                draw_text("SP:", x + 100.0, y, font_size, label_color);
+                draw_text(
+                    &format!("{:04X}", cpu.sp),
+                    x + 140.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                y += line_height;
+
+                // Interrupts
+                draw_text("INT:", x, y, font_size, label_color);
+                let int_status = if cpu.interrupt { "ENABLED" } else { "DISABLED" };
+                let int_color = if cpu.interrupt { GREEN } else { RED };
+                draw_text(int_status, x + 50.0, y, font_size, int_color);
+                y += line_height + 10.0;
+
+                // Registers header
+                draw_text("REGISTERS", x, y, 18.0, header_color);
+                y += line_height + 5.0;
+
+                // Registers in a grid
+                let regs = [
+                    ("A", cpu.a),
+                    ("B", cpu.b),
+                    ("C", cpu.c),
+                    ("D", cpu.d),
+                    ("E", cpu.e),
+                    ("H", cpu.h),
+                    ("L", cpu.l),
+                ];
+                for (i, (name, val)) in regs.iter().enumerate() {
+                    let col = (i % 4) as f32;
+                    let row = (i / 4) as f32;
+                    let rx = x + col * 95.0;
+                    let ry = y + row * line_height;
+                    draw_text(&format!("{}:", name), rx, ry, font_size, label_color);
+                    draw_text(
+                        &format!("{:02X}", val),
+                        rx + 25.0,
+                        ry,
+                        font_size,
+                        value_color,
+                    );
+                }
+                y += (line_height * 2.0) + 10.0;
+
+                // Register pairs
+                draw_text("BC:", x, y, font_size, label_color);
+                draw_text(
+                    &format!("{:04X}", cpu.bc()),
+                    x + 35.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                draw_text("DE:", x + 100.0, y, font_size, label_color);
+                draw_text(
+                    &format!("{:04X}", cpu.de()),
+                    x + 135.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                draw_text("HL:", x + 200.0, y, font_size, label_color);
+                draw_text(
+                    &format!("{:04X}", cpu.hl()),
+                    x + 235.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                y += line_height + 10.0;
+
+                // Flags header
+                draw_text("FLAGS", x, y, 18.0, header_color);
+                y += line_height + 5.0;
+
+                // Flags
+                let flags = [
+                    ("Z", cpu.z),
+                    ("S", cpu.s),
+                    ("P", cpu.p),
+                    ("CY", cpu.cy),
+                    ("AC", cpu.ac),
+                ];
+                for (i, (name, val)) in flags.iter().enumerate() {
+                    let fx = x + (i as f32) * 70.0;
+                    draw_text(&format!("{}:", name), fx, y, font_size, label_color);
+                    let flag_val = if *val { "1" } else { "0" };
+                    let flag_color = if *val { GREEN } else { RED };
+                    draw_text(flag_val, fx + 30.0, y, font_size, flag_color);
+                }
+                y += line_height + 15.0;
+
+                // I/O Ports
+                draw_text("I/O PORTS", x, y, 18.0, header_color);
+                y += line_height + 5.0;
+                draw_text("P1:", x, y, font_size, label_color);
+                draw_text(
+                    &format!("{:02X} ({:08b})", io.port1, io.port1),
+                    x + 35.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                y += line_height;
+                draw_text("P2:", x, y, font_size, label_color);
+                draw_text(
+                    &format!("{:02X} ({:08b})", io.port2, io.port2),
+                    x + 35.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                y += line_height;
+                draw_text("Shift:", x, y, font_size, label_color);
+                let shift_val =
+                    ((io.shift_msb as u16) << 8 | io.shift_lsb as u16) >> (8 - io.shift_offset);
+                draw_text(
+                    &format!("{:02X} (off:{})", shift_val as u8, io.shift_offset),
+                    x + 60.0,
+                    y,
+                    font_size,
+                    value_color,
+                );
+                y += line_height + 15.0;
+
+                // Control buttons
+                draw_text("CONTROLS", x, y, 18.0, header_color);
+                y += line_height + 5.0;
+
+                // Status indicator
+                let status_text = if paused { "PAUSED" } else { "RUNNING" };
+                let status_color = if paused { YELLOW } else { GREEN };
+                draw_text("Status:", x, y, font_size, label_color);
+                draw_text(status_text, x + 70.0, y, font_size, status_color);
+                y += line_height + 5.0;
+
+                // Button helper
+                let mouse_pos = mouse_position();
+                let mouse_clicked = is_mouse_button_pressed(MouseButton::Left);
+
+                let mut draw_button =
+                    |bx: f32, by: f32, bw: f32, bh: f32, label: &str, enabled: bool| -> bool {
+                        let hover = mouse_pos.0 >= bx
+                            && mouse_pos.0 <= bx + bw
+                            && mouse_pos.1 >= by
+                            && mouse_pos.1 <= by + bh;
+                        let bg_color = if !enabled {
+                            Color::new(0.2, 0.2, 0.2, 1.0)
+                        } else if hover {
+                            Color::new(0.3, 0.5, 0.3, 1.0)
+                        } else {
+                            Color::new(0.2, 0.3, 0.2, 1.0)
+                        };
+                        let border_color = if enabled {
+                            GREEN
+                        } else {
+                            Color::new(0.3, 0.3, 0.3, 1.0)
+                        };
+                        let text_color = if enabled {
+                            WHITE
+                        } else {
+                            Color::new(0.4, 0.4, 0.4, 1.0)
+                        };
+
+                        draw_rectangle(bx, by, bw, bh, bg_color);
+                        draw_rectangle_lines(bx, by, bw, bh, 2.0, border_color);
+                        let text_x = bx + (bw - label.len() as f32 * 7.0) / 2.0;
+                        let text_y = by + bh / 2.0 + 5.0;
+                        draw_text(label, text_x, text_y, 16.0, text_color);
+
+                        enabled && hover && mouse_clicked
+                    };
+
+                let btn_w = 120.0;
+                let btn_h = 28.0;
+                let btn_spacing = 5.0;
+
+                // Row 1: Play/Pause and Reset
+                let btn_y = y;
+                if paused {
+                    if draw_button(x, btn_y, btn_w, btn_h, "PLAY", true) {
+                        paused = false;
+                    }
+                } else {
+                    if draw_button(x, btn_y, btn_w, btn_h, "PAUSE", true) {
+                        paused = true;
+                    }
+                }
+                if draw_button(x + btn_w + btn_spacing, btn_y, btn_w, btn_h, "RESET", true) {
+                    cpu = Cpu8080::new();
+                    cpu.load(&rom);
+                    io = SpaceInvadersIO::new();
+                    next_interrupt = 0xcf;
+                    cycle_count = 0;
+                    paused = false;
+                }
+                y += btn_h + btn_spacing;
+
+                // Row 2: Step (only when paused)
+                if draw_button(x, y, btn_w * 2.0 + btn_spacing, btn_h, "STEP (N)", paused) {
+                    step_once = true;
+                }
+                y += btn_h + btn_spacing;
+
+                // Row 3: Interrupt buttons
+                if draw_button(x, y, btn_w, btn_h, "VBLANK INT", paused) {
+                    fire_vblank = true;
+                }
+                if draw_button(
+                    x + btn_w + btn_spacing,
+                    y,
+                    btn_w,
+                    btn_h,
+                    "HALF-VBL INT",
+                    paused,
+                ) {
+                    fire_half_vblank = true;
+                }
+                y += btn_h + btn_spacing;
+                y += 10.0;
+
+                // Keyboard shortcuts help
+                draw_text("Keys: P=Pause  N=Step  R=Reset", x, y, 12.0, label_color);
+                y += line_height + 10.0;
+
+                // Disassembly header
+                draw_text("DISASSEMBLY (Last 15)", x, y, 18.0, header_color);
+                y += line_height + 5.0;
+
+                // Show last 15 instructions
+                let history_len = cpu.history.len();
+                let start = if history_len > 15 {
+                    history_len - 15
+                } else {
+                    0
+                };
+                let trace_color = Color::new(1.0, 0.8, 0.4, 1.0);
+                for instr in cpu.history.iter().skip(start) {
+                    draw_text(instr, x, y, 14.0, trace_color);
+                    y += 16.0;
+                    if y > GAME_HEIGHT as f32 - 20.0 {
+                        break;
+                    }
+                }
+            } // end if show_debug_panel
 
             next_frame().await;
-        } // end if next_interrupt == 0xcf (render on vblank)
+        }
     }
 }
 

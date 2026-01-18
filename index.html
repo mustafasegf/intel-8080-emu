@@ -2,20 +2,21 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Space Invaders - 8080 Emulator</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            touch-action: manipulation;
         }
         
         html, body {
             width: 100%;
             height: 100%;
             background-color: #1a1a2e;
-            overflow: hidden;
+            overflow: auto;
         }
         
         body {
@@ -25,22 +26,26 @@
             justify-content: center;
             font-family: 'Courier New', monospace;
             color: #00ff00;
+            padding: 10px;
+            min-height: 100%;
         }
         
         h1 {
-            margin-bottom: 10px;
+            margin-bottom: 8px;
+            font-size: 28px;
             text-shadow: 0 0 10px #00ff00;
+            text-align: center;
         }
         
         .controls {
-            margin-bottom: 15px;
+            margin-bottom: 10px;
             text-align: center;
-            font-size: 14px;
+            font-size: 16px;
             color: #aaffaa;
         }
         
         .controls span {
-            margin: 0 10px;
+            margin: 0 8px;
         }
         
         canvas {
@@ -50,9 +55,109 @@
         }
         
         .footer {
-            margin-top: 15px;
-            font-size: 12px;
+            margin-top: 10px;
+            font-size: 14px;
             color: #666;
+            text-align: center;
+        }
+        
+        /* Mobile touch controls */
+        .touch-controls {
+            display: none;
+            width: 100%;
+            max-width: 400px;
+            padding: 10px 0;
+            gap: 8px;
+        }
+        
+        .touch-row {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .touch-btn {
+            background: linear-gradient(145deg, #2a2a4e, #1a1a2e);
+            border: 2px solid #00ff00;
+            border-radius: 10px;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 15px 20px;
+            min-width: 65px;
+            text-align: center;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+            transition: all 0.1s;
+        }
+        
+        .touch-btn:active, .touch-btn.active {
+            background: linear-gradient(145deg, #00ff00, #00aa00);
+            color: #1a1a2e;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.5);
+        }
+        
+        .touch-btn.fire {
+            background: linear-gradient(145deg, #4a2a2a, #2e1a1a);
+            border-color: #ff4444;
+            color: #ff4444;
+            padding: 18px 30px;
+            font-size: 18px;
+        }
+        
+        .touch-btn.fire:active, .touch-btn.fire.active {
+            background: linear-gradient(145deg, #ff4444, #aa0000);
+            color: #1a1a2e;
+        }
+        
+        .direction-controls {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .direction-controls .touch-btn {
+            padding: 18px 25px;
+            font-size: 22px;
+        }
+        
+        /* Desktop: show keyboard controls, hide touch */
+        /* Mobile: hide keyboard controls, show touch */
+        @media (max-width: 800px), (pointer: coarse) {
+            .controls {
+                display: none;
+            }
+            .touch-controls {
+                display: flex;
+                flex-direction: column;
+            }
+            h1 {
+                font-size: 22px;
+            }
+        }
+        
+        @media (max-width: 500px) {
+            body {
+                padding: 5px;
+            }
+            h1 {
+                font-size: 18px;
+            }
+            .touch-btn {
+                padding: 12px 14px;
+                font-size: 14px;
+                min-width: 55px;
+            }
+            .touch-btn.fire {
+                padding: 14px 22px;
+                font-size: 16px;
+            }
+            .direction-controls .touch-btn {
+                padding: 14px 18px;
+                font-size: 20px;
+            }
         }
     </style>
 </head>
@@ -62,13 +167,115 @@
         <span>[C] Coin</span>
         <span>[1] 1P Start</span>
         <span>[2] 2P Start</span>
-        <span>[A/D or Arrows] Move</span>
+        <span>[A/D/Arrows] Move</span>
         <span>[Space/W] Fire</span>
+        <span>[P] Pause</span>
+        <span>[N] Step</span>
+        <span>[R] Reset</span>
     </div>
-    <canvas id="glcanvas" tabindex="1" width="672" height="768"></canvas>
-    <div class="footer">Intel 8080 Emulator - Built with Rust + Macroquad</div>
+    
+    <canvas id="glcanvas" tabindex="1" width="1072" height="768"></canvas>
+    
+    <!-- Mobile touch controls -->
+    <div class="touch-controls">
+        <div class="touch-row">
+            <button class="touch-btn" id="btn-coin">COIN</button>
+            <button class="touch-btn" id="btn-1p">1P</button>
+            <button class="touch-btn" id="btn-2p">2P</button>
+            <button class="touch-btn" id="btn-pause">PAUSE</button>
+        </div>
+        <div class="touch-row">
+            <div class="direction-controls">
+                <button class="touch-btn" id="btn-left">◀</button>
+                <button class="touch-btn" id="btn-right">▶</button>
+            </div>
+            <button class="touch-btn fire" id="btn-fire">FIRE</button>
+        </div>
+    </div>
+    
+    <div class="footer">Intel 8080 Emulator - Rust + Macroquad</div>
 
     <script src="js/mq_js_bundle.js"></script>
-    <script>load("intel-8080-emu.wasm");</script>
+    <script>
+        load("intel-8080-emu.wasm");
+        
+        // Mobile touch controls - simulate keyboard events
+        const keyMap = {
+            'btn-coin': 'KeyC',
+            'btn-1p': 'Digit1',
+            'btn-2p': 'Digit2',
+            'btn-left': 'ArrowLeft',
+            'btn-right': 'ArrowRight',
+            'btn-fire': 'Space',
+            'btn-pause': 'KeyP'
+        };
+        
+        const keyCodeMap = {
+            'btn-coin': 67,
+            'btn-1p': 49,
+            'btn-2p': 50,
+            'btn-left': 37,
+            'btn-right': 39,
+            'btn-fire': 32,
+            'btn-pause': 80
+        };
+        
+        function sendKey(id, isDown) {
+            const code = keyMap[id];
+            const keyCode = keyCodeMap[id];
+            const event = new KeyboardEvent(isDown ? 'keydown' : 'keyup', {
+                code: code,
+                keyCode: keyCode,
+                which: keyCode,
+                bubbles: true
+            });
+            document.getElementById('glcanvas').dispatchEvent(event);
+        }
+        
+        // Setup touch handlers
+        Object.keys(keyMap).forEach(id => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            
+            btn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                btn.classList.add('active');
+                sendKey(id, true);
+            }, { passive: false });
+            
+            btn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                btn.classList.remove('active');
+                sendKey(id, false);
+            }, { passive: false });
+            
+            btn.addEventListener('touchcancel', (e) => {
+                btn.classList.remove('active');
+                sendKey(id, false);
+            });
+            
+            btn.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                btn.classList.add('active');
+                sendKey(id, true);
+            });
+            
+            btn.addEventListener('mouseup', (e) => {
+                btn.classList.remove('active');
+                sendKey(id, false);
+            });
+            
+            btn.addEventListener('mouseleave', (e) => {
+                if (btn.classList.contains('active')) {
+                    btn.classList.remove('active');
+                    sendKey(id, false);
+                }
+            });
+        });
+        
+        document.getElementById('glcanvas').addEventListener('touchstart', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+    </script>
 </body>
 </html>
