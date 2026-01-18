@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Space Invaders - 8080 Emulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            width: 100%;
+            height: 100%;
+            background-color: #1a1a2e;
+            overflow: hidden;
+        }
+        
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Courier New', monospace;
+            color: #00ff00;
+        }
+        
+        h1 {
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px #00ff00;
+        }
+        
+        .controls {
+            margin-bottom: 15px;
+            text-align: center;
+            font-size: 14px;
+            color: #aaffaa;
+        }
+        
+        .controls span {
+            margin: 0 10px;
+        }
+        
+        canvas {
+            border: 3px solid #00ff00;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+            outline: none;
+        }
+        
+        .footer {
+            margin-top: 15px;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>SPACE INVADERS</h1>
+    <div class="controls">
+        <span>[C] Coin</span>
+        <span>[1] 1P Start</span>
+        <span>[2] 2P Start</span>
+        <span>[A/D or Arrows] Move</span>
+        <span>[Space/W] Fire</span>
+    </div>
+    <canvas id="glcanvas" tabindex="1" width="672" height="768"></canvas>
+    <div class="footer">Intel 8080 Emulator - Built with Rust + Macroquad</div>
+
+    <script src="js/mq_js_bundle.js"></script>
+    <script>load("intel-8080-emu.wasm");</script>
+</body>
+</html>

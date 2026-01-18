@@ -1,17 +1,19 @@
 #![allow(unused)]
-use std::io::{self, BufRead, Read};
 
 use anyhow::Result;
-
 use macroquad::prelude::*;
 
 const PIXEL_SIZE: i32 = 3;
-const WIDTH: i32 = 224 * PIXEL_SIZE;
-const HEIGHT: i32 = 256 * PIXEL_SIZE;
+// Space Invaders frame buffer is 256 wide x 224 tall (in memory)
+// The monitor is rotated 90 degrees CCW in the cabinet, so:
+// - Frame buffer width (256) becomes screen height
+// - Frame buffer height (224) becomes screen width
+const WIDTH: i32 = 224 * PIXEL_SIZE; // 672
+const HEIGHT: i32 = 256 * PIXEL_SIZE; // 768
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "8080 Emulator".to_owned(),
+        window_title: "Space Invaders - 8080 Emulator".to_owned(),
         fullscreen: false,
         window_resizable: false,
         window_width: WIDTH,
@@ -20,117 +22,370 @@ fn window_conf() -> Conf {
     }
 }
 
-#[macroquad::main(window_conf)]
-async fn main() -> Result<()> {
-    println!("8080 emulator");
+/// I/O Bus trait for abstracting hardware-specific I/O
+trait Bus {
+    fn port_in(&mut self, port: u8) -> u8;
+    fn port_out(&mut self, port: u8, value: u8);
+}
 
-    let rom = std::fs::read("./rom/space-invaders/invaders").expect("Unable to read file");
+/// Space Invaders specific I/O hardware
+///
+/// I/O Ports:
+/// - Read port 1: Player 1 controls, coin, start
+/// - Read port 2: Player 2 controls, DIP switches
+/// - Read port 3: Shift register result
+/// - Write port 2: Shift amount (3 bits)
+/// - Write port 3: Sound bits 1
+/// - Write port 4: Shift register data
+/// - Write port 5: Sound bits 2
+/// - Write port 6: Watchdog
+struct SpaceInvadersIO {
+    /// Shift register MSB (most recently written)
+    shift_msb: u8,
+    /// Shift register LSB (previously written MSB)
+    shift_lsb: u8,
+    /// Shift amount (0-7)
+    shift_offset: u8,
+    /// Input port 1 state (directly mapped from keyboard)
+    /// bit 0 = coin (deposit)
+    /// bit 1 = P2 start
+    /// bit 2 = P1 start  
+    /// bit 3 = always 1 (active low, active low, active low)
+    /// bit 4 = P1 fire
+    /// bit 5 = P1 left
+    /// bit 6 = P1 right
+    /// bit 7 = not connected
+    port1: u8,
+    /// Input port 2 state (DIP switches + P2 controls)
+    /// bit 0,1 = number of lives (DIP) - 00=3, 01=4, 10=5, 11=6
+    /// bit 2 = tilt
+    /// bit 3 = extra ship at (0=1500, 1=1000) (DIP)
+    /// bit 4 = P2 fire
+    /// bit 5 = P2 left
+    /// bit 6 = P2 right
+    /// bit 7 = coin info in demo (DIP)
+    port2: u8,
+}
 
-    let mut cpu = Cpu8080::new();
-    cpu.load(&rom);
-    // cpu.mirror = 0x400;
-    //
-    // for _ in 0..40_500 {
-    //     let pc = cpu.pc;
-    //     cpu.step();
-    //     println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
-    // }
-    //
-    // dbg!(
-    //     cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
-    //     cpu.z, cpu.s
-    // );
-    //
-    // let stdin = io::stdin();
-    // loop {
-    //     let mut buffer = String::new();
-    //     stdin.lock().read_line(&mut buffer)?;
-    //     if buffer.as_str() == "q\n" {
-    //         break;
-    //     }
-    //
-    //     if buffer.as_str() == "d\n" {
-    //         dbg!(
-    //             cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p,
-    //             cpu.ac, cpu.z, cpu.s
-    //         );
-    //         continue;
-    //     }
-    //
-    //     let pc = cpu.pc;
-    //     cpu.step();
-    //     println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
-    // }
-    // return Ok(());
-
-    loop {
-        let delta = get_frame_time();
-
-        for i in 0..(2_000_000. * delta) as usize {
-            let pc = cpu.pc;
-            cpu.step();
-            println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
+impl SpaceInvadersIO {
+    fn new() -> Self {
+        Self {
+            shift_msb: 0,
+            shift_lsb: 0,
+            shift_offset: 0,
+            port1: 0, // no buttons pressed
+            port2: 0, // DIP: 3 lives, extra ship at 1500
         }
-
-        clear_background(BLACK);
-
-        // for space invader, the vram starts from 0x2400 until 0x3fff
-        // the color is monocrome so i need to bitshift to get 8 pixel
-        for mem_pointer in 0x2400..0x4000 {
-            // draw 8 pixel at a time
-            for offset in 0..8 {
-                let color = match (cpu.memory[mem_pointer]) & (1 << offset) > 0 {
-                    true => WHITE,
-                    _ => BLACK,
-                };
-
-                let x =
-                    ((((mem_pointer - 0x2400) * 8 + offset) % 256) * PIXEL_SIZE as usize) as f32;
-                let y =
-                    ((((mem_pointer - 0x2400) * 8 + offset) / 256) * PIXEL_SIZE as usize) as f32;
-
-                let w = PIXEL_SIZE as f32;
-                let h = PIXEL_SIZE as f32;
-
-                let x_center = WIDTH as f32 / 2.;
-                let y_center = HEIGHT as f32 / 2.;
-
-                // -90 deg rotation since the memory buffer is rotated
-                let rot_x = (y - x_center) + x_center;
-                let rot_y = -(x - y_center) + y_center;
-
-                draw_rectangle(rot_x, rot_y, w, h, color)
-            }
-        }
-
-        next_frame().await;
     }
 
-    // for i in 0..0x4000 / 0x10 {
-    //     print!("{:#06x}  ", i * 0x10);
-    //     for mem in cpu.memory.iter().skip(i * 0x10).take(0x10) {
-    //         print!("{:#04x} ", mem);
-    //     }
-    //     println!();
-    // }
-    //
-    // dbg!(
-    //     cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
-    //     cpu.z, cpu.s
-    // );
-    //
-    // for _ in 0..2 {
-    //     let pc = cpu.pc;
-    //     cpu.step();
-    //     println!("{:#06x} {:?}", pc, cpu.history.last().unwrap());
-    // }
-    //
-    // dbg!(
-    //     cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.pc, cpu.sp, cpu.cy, cpu.p, cpu.ac,
-    //     cpu.z, cpu.s
-    // );
+    /// Update input ports based on keyboard state
+    fn update_inputs(&mut self) -> bool {
+        // Reset inputs - bit 3 of port1 is always 1
+        self.port1 = 0x08;
+        self.port2 = 0;
 
-    Ok(())
+        let mut any_key = false;
+
+        // Coin - C key
+        if is_key_down(KeyCode::C) {
+            self.port1 |= 0x01;
+            any_key = true;
+        }
+
+        // P1 Start - 1 key
+        if is_key_down(KeyCode::Key1) {
+            self.port1 |= 0x04;
+            any_key = true;
+        }
+
+        // P2 Start - 2 key
+        if is_key_down(KeyCode::Key2) {
+            self.port1 |= 0x02;
+            any_key = true;
+        }
+
+        // P1 Fire - Space or W
+        if is_key_down(KeyCode::Space) || is_key_down(KeyCode::W) {
+            self.port1 |= 0x10;
+            any_key = true;
+        }
+
+        // P1 Left - Left arrow or A
+        if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
+            self.port1 |= 0x20;
+            any_key = true;
+        }
+
+        // P1 Right - Right arrow or D
+        if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
+            self.port1 |= 0x40;
+            any_key = true;
+        }
+
+        // P2 Fire - I key
+        if is_key_down(KeyCode::I) {
+            self.port2 |= 0x10;
+            any_key = true;
+        }
+
+        // P2 Left - J key
+        if is_key_down(KeyCode::J) {
+            self.port2 |= 0x20;
+            any_key = true;
+        }
+
+        // P2 Right - L key
+        if is_key_down(KeyCode::L) {
+            self.port2 |= 0x40;
+            any_key = true;
+        }
+
+        // Tilt - T key
+        if is_key_down(KeyCode::T) {
+            self.port2 |= 0x04;
+            any_key = true;
+        }
+
+        any_key
+    }
+}
+
+impl Bus for SpaceInvadersIO {
+    fn port_in(&mut self, port: u8) -> u8 {
+        match port {
+            0 => {
+                // INP0 - Not used by game, but mapped
+                // bit 0 = DIP4 (self-test at power up)
+                // bits 1-3 = always 1
+                // bits 4-6 = P1 controls (duplicate?)
+                0b0000_1110
+            }
+            1 => {
+                // INP1 - Player 1 controls
+                self.port1
+            }
+            2 => {
+                // INP2 - Player 2 controls + DIP switches
+                self.port2
+            }
+            3 => {
+                // Shift register read
+                // Reference: ((this._register << this._bitShift) >> 8) & 0xFF
+                let shift = ((self.shift_msb as u16) << 8) | (self.shift_lsb as u16);
+                ((shift << self.shift_offset) >> 8) as u8
+            }
+            _ => {
+                // Unknown port
+                0
+            }
+        }
+    }
+
+    fn port_out(&mut self, port: u8, value: u8) {
+        match port {
+            2 => {
+                // Shift amount (only lower 3 bits used)
+                self.shift_offset = value & 0x07;
+            }
+            3 => {
+                // Sound port 1
+                // bit 0 = UFO repeating sound
+                // bit 1 = player shot
+                // bit 2 = player explosion
+                // bit 3 = invader explosion
+                // bit 4 = extended play
+                // bit 5 = amp enable
+                // TODO: implement sound
+            }
+            4 => {
+                // Shift data
+                // Writing to port 4 shifts MSB into LSB, and the new value into MSB
+                self.shift_lsb = self.shift_msb;
+                self.shift_msb = value;
+            }
+            5 => {
+                // Sound port 2
+                // bit 0-3 = fleet movement sounds
+                // bit 4 = UFO hit
+                // TODO: implement sound
+            }
+            6 => {
+                // Watchdog - any write resets the watchdog timer
+                // Not critical for emulation
+            }
+            _ => {
+                // Unknown port - ignore
+            }
+        }
+    }
+}
+
+/// Embed ROM at compile time for web builds
+/// For native builds, we try to load from file first, then fall back to embedded
+#[cfg(target_arch = "wasm32")]
+const EMBEDDED_ROM: Option<&[u8]> = Some(include_bytes!("../rom/space-invaders/invaders"));
+
+#[cfg(not(target_arch = "wasm32"))]
+const EMBEDDED_ROM: Option<&[u8]> = None;
+
+fn load_rom() -> Vec<u8> {
+    // Try embedded ROM first (required for WASM)
+    if let Some(rom) = EMBEDDED_ROM {
+        return rom.to_vec();
+    }
+
+    // Try loading from file (native only)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Ok(rom) = std::fs::read("./rom/space-invaders/invaders") {
+            return rom;
+        }
+    }
+
+    panic!("Unable to load ROM! Place 'invaders' ROM file in ./rom/space-invaders/");
+}
+
+#[macroquad::main(window_conf)]
+async fn main() -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        println!("Space Invaders - 8080 Emulator");
+        println!("Controls:");
+        println!("  C = Insert Coin");
+        println!("  1 = 1 Player Start");
+        println!("  2 = 2 Player Start");
+        println!("  A/Left  = Move Left");
+        println!("  D/Right = Move Right");
+        println!("  Space/W = Fire");
+    }
+
+    let rom = load_rom();
+
+    let mut cpu = Cpu8080::new();
+    let mut io = SpaceInvadersIO::new();
+
+    cpu.load(&rom);
+
+    // Space Invaders runs at ~2MHz, 60Hz display
+    // That's ~33,333 cycles per frame, split between two interrupts
+    // RST 8 (0xCF) at mid-screen, RST 10 (0xD7) at vblank
+    const CYCLES_PER_HALF_FRAME: u64 = 16_667; // ~2MHz / 60Hz / 2
+
+    let mut next_interrupt: u8 = 0xcf; // Alternate between 0xCF and 0xD7
+    let mut cycle_count: u64 = 0;
+
+    loop {
+        // Update input state from keyboard
+        let any_key = io.update_inputs();
+
+        // Run CPU until we've executed enough cycles for half a frame
+        while cycle_count < CYCLES_PER_HALF_FRAME {
+            if !cpu.halt {
+                cpu.step(&mut io);
+                cycle_count += 4; // Approximate: average ~4 cycles per instruction
+            } else {
+                // If halted, just count cycles
+                cycle_count += 4;
+            }
+        }
+        cycle_count -= CYCLES_PER_HALF_FRAME;
+
+        // Fire interrupt - it will be queued and processed when interrupts are enabled
+        cpu.generate_interrupt(next_interrupt);
+        // Alternate between RST 8 (0xCF) and RST 10 (0xD7)
+        next_interrupt = if next_interrupt == 0xcf { 0xd7 } else { 0xcf };
+
+        // Only render and wait for frame on vblank (0xD7)
+        if next_interrupt == 0xcf {
+            // Just finished vblank interrupt, now render
+
+            // Render the screen
+            clear_background(BLACK);
+
+            // VRAM is at 0x2400-0x3FFF (7K bytes = 256x224 pixels, 1 bit per pixel)
+            // Memory layout: 32 bytes per row (32*8=256 pixels width), 224 rows (height)
+            // The monitor in the cabinet is rotated 90 degrees counter-clockwise
+            //
+            // In memory (before rotation):
+            //   - 224 rows of 32 bytes each (256 bits = 256 pixels wide)
+            //   - Each byte is a vertical strip of 8 pixels
+            //   - Bit 0 is at the top of that strip, bit 7 at the bottom
+            //
+            // For CCW rotation: original (x, y) -> screen (y, width-1-x)
+            // But we also need to flip because the frame buffer origin differs
+
+            for byte_idx in 0..0x1c00 {
+                let byte = cpu.memory[0x2400 + byte_idx];
+                if byte == 0 {
+                    continue; // Skip empty bytes for performance
+                }
+
+                for bit in 0..8 {
+                    if byte & (1 << bit) != 0 {
+                        // Calculate original position in the 256x224 frame buffer
+                        // byte_idx / 32 = row (0..223), byte_idx % 32 = column of bytes (0..31)
+                        let row = byte_idx / 32; // 0..223 (this is the X in rotated view)
+                        let col = byte_idx % 32; // 0..31
+                        let original_x = col * 8 + bit; // 0..255 (pixel X before rotation)
+                        let original_y = row; // 0..223 (pixel Y before rotation)
+
+                        // Rotate 90 degrees counter-clockwise for the cabinet display
+                        // CCW rotation: (x, y) -> (y, maxX - x)
+                        // maxX = 255, so new position is (original_y, 255 - original_x)
+                        let screen_x = original_y; // 0..223
+                        let screen_y = 255 - original_x; // 0..255
+
+                        // Apply pixel scaling
+                        let x = (screen_x as i32 * PIXEL_SIZE) as f32;
+                        let y = (screen_y as i32 * PIXEL_SIZE) as f32;
+
+                        draw_rectangle(x, y, PIXEL_SIZE as f32, PIXEL_SIZE as f32, WHITE);
+                    }
+                }
+            }
+
+            // Debug: show input state at bottom of screen
+            let debug_y = HEIGHT as f32 - 20.0;
+            draw_text(
+                &format!("P1:{:02X} P2:{:02X}", io.port1, io.port2),
+                10.0,
+                debug_y,
+                20.0,
+                GREEN,
+            );
+
+            // Show key press indicator
+            if any_key {
+                draw_text("KEY!", WIDTH as f32 - 60.0, debug_y, 20.0, RED);
+            }
+
+            // Show credit count from memory (for debugging)
+            // Credit count is at 0x20EB in Space Invaders
+            let credits = cpu.memory[0x20eb];
+            draw_text(&format!("CR:{}", credits), 150.0, debug_y, 20.0, YELLOW);
+
+            // Show PC and interrupt state
+            draw_text(
+                &format!(
+                    "PC:{:04X} SP:{:04X} INT:{}",
+                    cpu.pc,
+                    cpu.sp,
+                    if cpu.interrupt { "ON" } else { "OFF" }
+                ),
+                220.0,
+                debug_y,
+                20.0,
+                SKYBLUE,
+            );
+
+            // Show last instruction
+            if let Some(last) = cpu.history.last() {
+                draw_text(last, 450.0, debug_y, 16.0, ORANGE);
+            }
+
+            next_frame().await;
+        } // end if next_interrupt == 0xcf (render on vblank)
+    }
 }
 
 #[derive(Debug)]
@@ -159,7 +414,12 @@ struct Cpu8080 {
     /// auxiliary carry
     pub ac: bool,
 
+    /// Interrupts enabled (controlled by EI/DI)
     pub interrupt: bool,
+    /// Interrupt is pending/waiting to be processed
+    pub interrupt_pending: bool,
+    /// Opcode of pending interrupt (e.g., 0xCF for RST 1)
+    pub pending_interrupt_opcode: u8,
 
     pub halt: bool,
 
@@ -197,6 +457,8 @@ impl Cpu8080 {
             cy: false,
             ac: false,
             interrupt: false,
+            interrupt_pending: false,
+            pending_interrupt_opcode: 0,
             halt: false,
             memory: [0; 0x10000],
             mirror: 0,
@@ -236,7 +498,29 @@ impl Cpu8080 {
     }
 
     fn read(&self, addr: u16) -> u8 {
-        self.memory[addr as usize]
+        let addr = addr as usize;
+        // Handle RAM mirror: 0x4000-0x5FFF mirrors 0x2000-0x3FFF
+        if addr >= 0x4000 && addr < 0x6000 {
+            return self.memory[addr - 0x2000];
+        }
+        if addr >= 0x6000 {
+            return 0; // Nothing above 0x6000
+        }
+        self.memory[addr]
+    }
+
+    fn write(&mut self, addr: u16, value: u8) {
+        let addr = addr as usize;
+        // ROM is 0x0000-0x1FFF (write protected)
+        // RAM is 0x2000-0x3FFF (writable)
+        // RAM mirror is 0x4000-0x5FFF -> maps to 0x2000-0x3FFF
+        if addr >= 0x2000 && addr < 0x4000 {
+            self.memory[addr] = value;
+        } else if addr >= 0x4000 && addr < 0x6000 {
+            self.memory[addr - 0x2000] = value;
+        }
+        // Writes to ROM (0x0000-0x1FFF) are ignored
+        // Writes above 0x6000 are ignored
     }
 
     fn next_memory(&self) -> u16 {
@@ -244,25 +528,78 @@ impl Cpu8080 {
     }
 
     fn pop(&mut self) -> u16 {
-        let value = self.read(self.sp + 1) as u16 | (self.read(self.sp) as u16) << 8;
-        self.sp += 2;
-        value
+        // 8080 little-endian: low byte at SP, high byte at SP+1
+        let low = self.read(self.sp) as u16;
+        let high = self.read(self.sp + 1) as u16;
+        self.sp = self.sp.wrapping_add(2);
+        (high << 8) | low
     }
 
     fn push(&mut self, value: u16) {
-        self.sp -= 2;
-        self.memory[self.sp as usize] = (value >> 8) as u8;
-        self.memory[(self.sp + 1) as usize] = value as u8;
+        // 8080 little-endian: push high byte first (to SP-1), then low byte (to SP-2)
+        // Result: low byte at SP, high byte at SP+1
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, (value >> 8) as u8); // high byte
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, value as u8); // low byte
     }
 
     fn call(&mut self, addr: u16) {
-        self.sp -= 2;
-        self.memory[self.sp as usize] = (self.pc >> 8) as u8;
-        self.memory[(self.sp + 1) as usize] = self.pc as u8;
+        // Return address is PC + 3 (after the 3-byte CALL instruction)
+        let ret_addr = self.pc.wrapping_add(3);
+        // Push return address (high byte first, then low byte)
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, (ret_addr >> 8) as u8);
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, ret_addr as u8);
         self.pc = addr.wrapping_sub(1);
     }
 
-    fn step(&mut self) {
+    fn rst(&mut self, vector: u16) {
+        // Return address is PC + 1 (after the 1-byte RST instruction)
+        let ret_addr = self.pc.wrapping_add(1);
+        // Push return address (high byte first, then low byte)
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, (ret_addr >> 8) as u8);
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, ret_addr as u8);
+        self.pc = vector.wrapping_sub(1);
+    }
+
+    /// Generate an interrupt with the given opcode (typically RST instruction)
+    /// The opcode is queued and will be processed at the start of the next step()
+    /// when interrupts are enabled. For RST 1 pass 0xCF, for RST 2 pass 0xD7.
+    fn generate_interrupt(&mut self, opcode: u8) {
+        // Queue the interrupt - it will be processed when interrupts are enabled
+        self.interrupt_pending = true;
+        self.pending_interrupt_opcode = opcode;
+    }
+
+    /// Process a pending interrupt if interrupts are enabled
+    fn process_interrupt(&mut self) {
+        if !self.interrupt_pending || !self.interrupt {
+            return;
+        }
+        // Clear pending flag and disable interrupts
+        self.interrupt_pending = false;
+        self.interrupt = false;
+        // Push PC onto stack (high byte first, then low byte)
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, (self.pc >> 8) as u8);
+        self.sp = self.sp.wrapping_sub(1);
+        self.write(self.sp, self.pc as u8);
+        // Jump to interrupt vector
+        // RST n jumps to 8*n: RST 0=0x00, RST 1=0x08, RST 2=0x10, etc.
+        // Opcode 0xC7 = RST 0, 0xCF = RST 1, 0xD7 = RST 2, etc.
+        let vector = (self.pending_interrupt_opcode & 0x38) as u16;
+        self.pc = vector;
+        self.halt = false;
+    }
+
+    fn step(&mut self, io: &mut dyn Bus) {
+        // Process any pending interrupt at the start of each instruction
+        self.process_interrupt();
+
         match self.read(self.pc) {
             0x00 => self.history.push("NOP".to_string()),
             0x01 => {
@@ -272,11 +609,11 @@ impl Cpu8080 {
                 self.history.push(format!("LXI B, {:#06x}", addr));
             }
             0x02 => {
-                self.memory[self.bc() as usize] = self.a;
+                self.write(self.bc(), self.a);
                 self.history.push("STAX B".to_string());
             }
             0x03 => {
-                self.set_hl(self.hl().wrapping_add(1));
+                self.set_bc(self.bc().wrapping_add(1));
                 self.history.push("INX B".to_string());
             }
             0x04 => {
@@ -309,7 +646,7 @@ impl Cpu8080 {
                 self.history.push("DAD B".to_string());
             }
             0x0a => {
-                self.a = self.memory[self.bc() as usize];
+                self.a = self.read(self.bc());
                 self.history.push("LDAX B".to_string());
             }
             0x0b => {
@@ -332,7 +669,8 @@ impl Cpu8080 {
                 self.history.push(format!("MVI C, {:#04x}", self.c));
             }
             0x0f => {
-                self.cy = self.a & (1 << 7) != 0;
+                // RRC: bit 0 goes to carry and also wraps to bit 7
+                self.cy = self.a & 1 != 0;
                 self.a = self.a.rotate_right(1);
                 self.history.push("RRC".to_string());
             }
@@ -346,7 +684,7 @@ impl Cpu8080 {
                 self.history.push(format!("LXI D, {:#06x}", addr));
             }
             0x12 => {
-                self.memory[self.de() as usize] = self.a;
+                self.write(self.de(), self.a);
                 self.history.push("STAX D".to_string());
             }
             0x13 => {
@@ -369,10 +707,11 @@ impl Cpu8080 {
                 self.history.push(format!("MVI D, {:#04x}", self.d));
             }
             0x17 => {
-                let cy = self.a & (1 << 7) != 0;
-                self.a = self.a.rotate_left(1);
-                self.a |= cy as u8;
-                self.cy = cy;
+                // RAL: Rotate left through carry
+                // MSB goes to carry, old carry goes to LSB
+                let old_cy = self.cy as u8;
+                self.cy = self.a & 0x80 != 0;
+                self.a = (self.a << 1) | old_cy;
                 self.history.push("RAL".to_string());
             }
             0x18 => self
@@ -385,7 +724,7 @@ impl Cpu8080 {
                 self.history.push("DAD D".to_string());
             }
             0x1a => {
-                self.a = self.memory[self.de() as usize];
+                self.a = self.read(self.de());
                 self.history.push("LDAX D".to_string());
             }
             0x1b => {
@@ -408,10 +747,11 @@ impl Cpu8080 {
                 self.history.push(format!("MVI E, {:#04x}", self.e));
             }
             0x1f => {
-                let cy = self.a & (1 << 7) != 0;
-                self.a = self.a.rotate_right(1);
-                self.a |= cy as u8;
-                self.cy = cy;
+                // RAR: Rotate right through carry
+                // LSB goes to carry, old carry goes to MSB
+                let old_cy = self.cy as u8;
+                self.cy = self.a & 1 != 0;
+                self.a = (self.a >> 1) | (old_cy << 7);
                 self.history.push("RAR".to_string());
             }
             0x20 => self
@@ -426,8 +766,8 @@ impl Cpu8080 {
             0x22 => {
                 let addr = self.next_memory();
                 self.pc = self.pc.wrapping_add(2);
-                self.memory[addr as usize] = self.l;
-                self.memory[(addr + 1) as usize] = self.h;
+                self.write(addr, self.l);
+                self.write(addr.wrapping_add(1), self.h);
                 self.history.push(format!("SHLD {:#06x}", addr));
             }
             0x23 => {
@@ -450,13 +790,25 @@ impl Cpu8080 {
                 self.history.push(format!("MVI H, {:#04x}", self.h));
             }
             0x27 => {
-                let cy = self.a & (1 << 7) != 0;
-                let ac = self.a & 0x0f > 9;
-                let a = self.a;
-                self.a = self.a.rotate_left(1);
-                self.a |= cy as u8;
-                self.cy = cy;
-                self.ac = ac;
+                // DAA: Decimal Adjust Accumulator
+                // Step 1: If low nibble > 9 or AC flag is set, add 6
+                if (self.a & 0x0f) > 9 || self.ac {
+                    let low_result = self.a.wrapping_add(0x06);
+                    self.ac = (self.a & 0x0f) + 0x06 > 0x0f;
+                    self.a = low_result;
+                }
+                // Step 2: If high nibble > 9 or CY flag is set, add 0x60
+                if (self.a >> 4) > 9 || self.cy {
+                    let (high_result, overflow) = self.a.overflowing_add(0x60);
+                    if overflow {
+                        self.cy = true;
+                    }
+                    self.a = high_result;
+                }
+                // Set other flags based on result
+                self.z = self.a == 0;
+                self.s = self.a & 0x80 != 0;
+                self.p = self.a.count_ones() % 2 == 0;
                 self.history.push("DAA".to_string());
             }
             0x28 => self
@@ -471,8 +823,8 @@ impl Cpu8080 {
             0x2a => {
                 let addr = self.next_memory();
                 self.pc = self.pc.wrapping_add(2);
-                self.l = self.memory[addr as usize];
-                self.h = self.memory[(addr + 1) as usize];
+                self.l = self.read(addr);
+                self.h = self.read(addr.wrapping_add(1));
                 self.history.push(format!("LHLD {:#06x}", addr));
             }
             0x2b => {
@@ -509,7 +861,7 @@ impl Cpu8080 {
             0x32 => {
                 let addr = self.next_memory();
                 self.pc = self.pc.wrapping_add(2);
-                self.memory[addr as usize] = self.a;
+                self.write(addr, self.a);
                 self.history.push(format!("STA {:#06x}", addr));
             }
             0x33 => {
@@ -518,28 +870,30 @@ impl Cpu8080 {
             }
             0x34 => {
                 let addr = self.hl();
-                self.memory[addr as usize] = self.memory[addr as usize].wrapping_add(1);
-                self.z = self.memory[addr as usize] == 0;
-                self.s = self.memory[addr as usize] & (1 << 7) != 0;
-                self.p = self.memory[addr as usize].count_ones() % 2 == 0;
-                self.ac = self.memory[addr as usize] & 0x0f > 9;
+                let value = self.read(addr).wrapping_add(1);
+                self.write(addr, value);
+                self.z = value == 0;
+                self.s = value & (1 << 7) != 0;
+                self.p = value.count_ones() % 2 == 0;
+                self.ac = value & 0x0f == 0; // AC set if low nibble wrapped from 0xF to 0x0
                 self.history.push("INR M".to_string());
             }
             0x35 => {
                 let addr = self.hl();
-                self.memory[addr as usize] = self.memory[addr as usize].wrapping_sub(1);
-                self.z = self.memory[addr as usize] == 0;
-                self.s = self.memory[addr as usize] & (1 << 7) != 0;
-                self.p = self.memory[addr as usize].count_ones() % 2 == 0;
-                self.ac = self.memory[addr as usize] & 0x0f > 9;
+                let value = self.read(addr).wrapping_sub(1);
+                self.write(addr, value);
+                self.z = value == 0;
+                self.s = value & (1 << 7) != 0;
+                self.p = value.count_ones() % 2 == 0;
+                self.ac = value & 0x0f != 0x0f; // AC set if no borrow from bit 4
                 self.history.push("DCR M".to_string());
             }
             0x36 => {
                 let addr = self.hl();
-                self.memory[addr as usize] = self.read(self.pc + 1);
+                let value = self.read(self.pc + 1);
+                self.write(addr, value);
                 self.pc = self.pc.wrapping_add(1);
-                self.history
-                    .push(format!("MVI M, {:#04x}", self.memory[addr as usize]));
+                self.history.push(format!("MVI M, {:#04x}", value));
             }
             0x37 => {
                 self.cy = true;
@@ -557,7 +911,7 @@ impl Cpu8080 {
             0x3a => {
                 let addr = self.next_memory();
                 self.pc = self.pc.wrapping_add(2);
-                self.a = self.memory[addr as usize];
+                self.a = self.read(addr);
                 self.history.push(format!("LDA {:#06x}", addr));
             }
             0x3b => {
@@ -580,7 +934,8 @@ impl Cpu8080 {
                 self.history.push(format!("MVI A, {:#04x}", self.a));
             }
             0x3f => {
-                self.a = !self.a;
+                // CMC: Complement Carry flag
+                self.cy = !self.cy;
                 self.history.push("CMC".to_string());
             }
             0x40 => {
@@ -608,7 +963,7 @@ impl Cpu8080 {
                 self.history.push("MOV B, L".to_string());
             }
             0x46 => {
-                self.b = self.memory[self.hl() as usize];
+                self.b = self.read(self.hl());
                 self.history.push("MOV B, M".to_string());
             }
             0x47 => {
@@ -640,7 +995,7 @@ impl Cpu8080 {
                 self.history.push("MOV C, L".to_string());
             }
             0x4e => {
-                self.c = self.memory[self.hl() as usize];
+                self.c = self.read(self.hl());
                 self.history.push("MOV C, M".to_string());
             }
             0x4f => {
@@ -672,7 +1027,7 @@ impl Cpu8080 {
                 self.history.push("MOV D, L".to_string());
             }
             0x56 => {
-                self.d = self.memory[self.hl() as usize];
+                self.d = self.read(self.hl());
                 self.history.push("MOV D, M".to_string());
             }
             0x57 => {
@@ -704,7 +1059,7 @@ impl Cpu8080 {
                 self.history.push("MOV E, L".to_string());
             }
             0x5e => {
-                self.e = self.memory[self.hl() as usize];
+                self.e = self.read(self.hl());
                 self.history.push("MOV E, M".to_string());
             }
             0x5f => {
@@ -736,7 +1091,7 @@ impl Cpu8080 {
                 self.history.push("MOV H, L".to_string());
             }
             0x66 => {
-                self.h = self.memory[self.hl() as usize];
+                self.h = self.read(self.hl());
                 self.history.push("MOV H, M".to_string());
             }
             0x67 => {
@@ -768,7 +1123,7 @@ impl Cpu8080 {
                 self.history.push("MOV L, L".to_string());
             }
             0x6e => {
-                self.l = self.memory[self.hl() as usize];
+                self.l = self.read(self.hl());
                 self.history.push("MOV L, M".to_string());
             }
             0x6f => {
@@ -776,27 +1131,27 @@ impl Cpu8080 {
                 self.history.push("MOV L, A".to_string());
             }
             0x70 => {
-                self.memory[self.hl() as usize] = self.b;
+                self.write(self.hl(), self.b);
                 self.history.push("MOV M, B".to_string());
             }
             0x71 => {
-                self.memory[self.hl() as usize] = self.c;
+                self.write(self.hl(), self.c);
                 self.history.push("MOV M, C".to_string());
             }
             0x72 => {
-                self.memory[self.hl() as usize] = self.d;
+                self.write(self.hl(), self.d);
                 self.history.push("MOV M, D".to_string());
             }
             0x73 => {
-                self.memory[self.hl() as usize] = self.e;
+                self.write(self.hl(), self.e);
                 self.history.push("MOV M, E".to_string());
             }
             0x74 => {
-                self.memory[self.hl() as usize] = self.h;
+                self.write(self.hl(), self.h);
                 self.history.push("MOV M, H".to_string());
             }
             0x75 => {
-                self.memory[self.hl() as usize] = self.l;
+                self.write(self.hl(), self.l);
                 self.history.push("MOV M, L".to_string());
             }
             0x76 => {
@@ -804,7 +1159,7 @@ impl Cpu8080 {
                 self.history.push("HLT".to_string());
             }
             0x77 => {
-                self.memory[self.hl() as usize] = self.a;
+                self.write(self.hl(), self.a);
                 self.history.push("MOV M, A".to_string());
             }
             0x78 => {
@@ -832,7 +1187,7 @@ impl Cpu8080 {
                 self.history.push("MOV A, L".to_string());
             }
             0x7e => {
-                self.a = self.memory[self.hl() as usize];
+                self.a = self.read(self.hl());
                 self.history.push("MOV A, M".to_string());
             }
             0x7f => {
@@ -870,7 +1225,7 @@ impl Cpu8080 {
                 self.history.push("ADD L".to_string());
             }
             0x86 => {
-                let value = self.memory[self.hl() as usize];
+                let value = self.read(self.hl());
                 (self.a, self.cy) = self.a.overflowing_add(value);
                 flag!(self, self.a);
                 self.history.push("ADD M".to_string());
@@ -911,7 +1266,7 @@ impl Cpu8080 {
                 self.history.push("ADC L".to_string());
             }
             0x8e => {
-                let value = self.memory[self.hl() as usize];
+                let value = self.read(self.hl());
                 (self.a, self.cy) = self.a.overflowing_add(value.wrapping_add(self.cy as u8));
                 flag!(self, self.a);
                 self.history.push("ADC M".to_string());
@@ -952,7 +1307,7 @@ impl Cpu8080 {
                 self.history.push("SUB L".to_string());
             }
             0x96 => {
-                let value = self.memory[self.hl() as usize];
+                let value = self.read(self.hl());
                 (self.a, self.cy) = self.a.overflowing_sub(value);
                 flag!(self, self.a);
                 self.history.push("SUB M".to_string());
@@ -993,7 +1348,7 @@ impl Cpu8080 {
                 self.history.push("SBB L".to_string());
             }
             0x9e => {
-                let value = self.memory[self.hl() as usize];
+                let value = self.read(self.hl());
                 (self.a, self.cy) = self.a.overflowing_sub(value.wrapping_add(self.cy as u8));
                 flag!(self, self.a);
                 self.history.push("SBB M".to_string());
@@ -1006,165 +1361,199 @@ impl Cpu8080 {
             0xa0 => {
                 self.a &= self.b;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA B".to_string());
             }
             0xa1 => {
                 self.a &= self.c;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA C".to_string());
             }
             0xa2 => {
                 self.a &= self.d;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA D".to_string());
             }
             0xa3 => {
                 self.a &= self.e;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA E".to_string());
             }
             0xa4 => {
                 self.a &= self.h;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA H".to_string());
             }
             0xa5 => {
                 self.a &= self.l;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA L".to_string());
             }
             0xa6 => {
-                let value = self.memory[self.hl() as usize];
+                let value = self.read(self.hl());
                 self.a &= value;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA M".to_string());
             }
             0xa7 => {
                 self.a &= self.a;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ANA A".to_string());
             }
             0xa8 => {
                 self.a ^= self.b;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA B".to_string());
             }
             0xa9 => {
                 self.a ^= self.c;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA C".to_string());
             }
             0xaa => {
                 self.a ^= self.d;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA D".to_string());
             }
             0xab => {
                 self.a ^= self.e;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA E".to_string());
             }
             0xac => {
                 self.a ^= self.h;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA H".to_string());
             }
             0xad => {
                 self.a ^= self.l;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA L".to_string());
             }
             0xae => {
-                let value = self.memory[self.hl() as usize];
+                let value = self.read(self.hl());
                 self.a ^= value;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA M".to_string());
             }
             0xaf => {
                 self.a ^= self.a;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("XRA A".to_string());
             }
             0xb0 => {
                 self.a |= self.b;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA B".to_string());
             }
             0xb1 => {
                 self.a |= self.c;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA C".to_string());
             }
             0xb2 => {
                 self.a |= self.d;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA D".to_string());
             }
             0xb3 => {
                 self.a |= self.e;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA E".to_string());
             }
             0xb4 => {
                 self.a |= self.h;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA H".to_string());
             }
             0xb5 => {
                 self.a |= self.l;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA L".to_string());
             }
             0xb6 => {
-                let value = self.memory[self.hl() as usize];
+                let value = self.read(self.hl());
                 self.a |= value;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA M".to_string());
             }
             0xb7 => {
                 self.a |= self.a;
                 flag!(self, self.a);
+                self.cy = false;
                 self.history.push("ORA A".to_string());
             }
             0xb8 => {
-                (self.a, self.cy) = self.a.overflowing_sub(self.b);
-                flag!(self, self.a);
+                // CMP: compare only sets flags, does NOT modify accumulator
+                let (result, borrow) = self.a.overflowing_sub(self.b);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP B".to_string());
             }
             0xb9 => {
-                (self.a, self.cy) = self.a.overflowing_sub(self.c);
-                flag!(self, self.a);
+                let (result, borrow) = self.a.overflowing_sub(self.c);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP C".to_string());
             }
             0xba => {
-                (self.a, self.cy) = self.a.overflowing_sub(self.d);
-                flag!(self, self.a);
+                let (result, borrow) = self.a.overflowing_sub(self.d);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP D".to_string());
             }
             0xbb => {
-                (self.a, self.cy) = self.a.overflowing_sub(self.e);
-                flag!(self, self.a);
+                let (result, borrow) = self.a.overflowing_sub(self.e);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP E".to_string());
             }
             0xbc => {
-                (self.a, self.cy) = self.a.overflowing_sub(self.h);
-                flag!(self, self.a);
+                let (result, borrow) = self.a.overflowing_sub(self.h);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP H".to_string());
             }
             0xbd => {
-                (self.a, self.cy) = self.a.overflowing_sub(self.l);
-                flag!(self, self.a);
+                let (result, borrow) = self.a.overflowing_sub(self.l);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP L".to_string());
             }
             0xbe => {
-                let value = self.memory[self.hl() as usize];
-                (self.a, self.cy) = self.a.overflowing_sub(value);
-                flag!(self, self.a);
+                let value = self.read(self.hl());
+                let (result, borrow) = self.a.overflowing_sub(value);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP M".to_string());
             }
             0xbf => {
-                (self.a, self.cy) = self.a.overflowing_sub(self.a);
-                flag!(self, self.a);
+                // CMP A with itself: result is always 0, no borrow
+                let (result, borrow) = self.a.overflowing_sub(self.a);
+                self.cy = borrow;
+                flag!(self, result);
                 self.history.push("CMP A".to_string());
             }
             0xc0 => {
@@ -1212,7 +1601,7 @@ impl Cpu8080 {
                 self.history.push(format!("ADI {:#04x}", value));
             }
             0xc7 => {
-                self.call(0x00);
+                self.rst(0x00);
                 self.history.push("RST 0".to_string());
             }
             0xc8 => {
@@ -1222,7 +1611,7 @@ impl Cpu8080 {
                 self.history.push("RZ".to_string());
             }
             0xc9 => {
-                self.pc = self.pop().wrapping_add(2);
+                self.pc = self.pop().wrapping_sub(1);
                 self.history.push("RET".to_string());
             }
             0xca => {
@@ -1258,7 +1647,7 @@ impl Cpu8080 {
                 self.history.push(format!("ACI {:#04x}", value));
             }
             0xcf => {
-                self.call(0x08);
+                self.rst(0x08);
                 self.history.push("RST 1".to_string());
             }
             0xd0 => {
@@ -1282,6 +1671,7 @@ impl Cpu8080 {
             }
             0xd3 => {
                 let port = self.read(self.pc + 1);
+                io.port_out(port, self.a);
                 self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("OUT {:#04x}", port));
             }
@@ -1306,7 +1696,7 @@ impl Cpu8080 {
                 self.history.push(format!("SUI {:#04x}", value));
             }
             0xd7 => {
-                self.call(0x10);
+                self.rst(0x10);
                 self.history.push("RST 2".to_string());
             }
             0xd8 => {
@@ -1328,6 +1718,7 @@ impl Cpu8080 {
             }
             0xdb => {
                 let port = self.read(self.pc + 1);
+                self.a = io.port_in(port);
                 self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("IN {:#04x}", port));
             }
@@ -1351,7 +1742,7 @@ impl Cpu8080 {
                 self.history.push(format!("SBI {:#04x}", value));
             }
             0xdf => {
-                self.call(0x18);
+                self.rst(0x18);
                 self.history.push("RST 3".to_string());
             }
             0xe0 => {
@@ -1374,9 +1765,13 @@ impl Cpu8080 {
                 self.history.push(format!("JPO {:#06x}", addr));
             }
             0xe3 => {
-                let hl = self.pop();
-                self.push(self.hl());
-                self.set_hl(hl);
+                // XTHL: Exchange HL with top of stack (SP unchanged)
+                let low = self.read(self.sp);
+                let high = self.read(self.sp + 1);
+                self.write(self.sp, self.l);
+                self.write(self.sp + 1, self.h);
+                self.l = low;
+                self.h = high;
                 self.history.push("XTHL".to_string());
             }
             0xe4 => {
@@ -1396,11 +1791,12 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 self.a &= value;
                 flag!(self, self.a);
+                self.cy = false;
                 self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("ANI {:#04x}", value));
             }
             0xe7 => {
-                self.call(0x20);
+                self.rst(0x20);
                 self.history.push("RST 4".to_string());
             }
             0xe8 => {
@@ -1410,7 +1806,8 @@ impl Cpu8080 {
                 self.history.push("RPE".to_string());
             }
             0xe9 => {
-                self.pc = self.hl();
+                // PCHL: Jump to address in HL (subtract 1 because step() adds 1)
+                self.pc = self.hl().wrapping_sub(1);
                 self.history.push("PCHL".to_string());
             }
             0xea => {
@@ -1443,11 +1840,12 @@ impl Cpu8080 {
                 let value = self.read(self.pc + 1);
                 self.a ^= value;
                 flag!(self, self.a);
+                self.cy = false;
                 self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("XRI {:#04x}", value));
             }
             0xef => {
-                self.call(0x28);
+                self.rst(0x28);
                 self.history.push("RST 5".to_string());
             }
             0xf0 => {
@@ -1457,12 +1855,15 @@ impl Cpu8080 {
                 self.history.push("RP".to_string());
             }
             0xf1 => {
+                // POP PSW: flags from SP, A from SP+1
                 let value = self.pop();
-                self.s = value & (1 << 7) != 0;
-                self.z = value & (1 << 6) != 0;
-                self.ac = value & (1 << 4) != 0;
-                self.p = value & (1 << 2) != 0;
-                self.cy = value & 1 != 0;
+                let flags = (value & 0xFF) as u8;
+                self.a = (value >> 8) as u8;
+                self.s = flags & (1 << 7) != 0;
+                self.z = flags & (1 << 6) != 0;
+                self.ac = flags & (1 << 4) != 0;
+                self.p = flags & (1 << 2) != 0;
+                self.cy = flags & 1 != 0;
                 self.history.push("POP PSW".to_string());
             }
             0xf2 => {
@@ -1487,25 +1888,28 @@ impl Cpu8080 {
                 self.history.push(format!("CP {:#06x}", addr));
             }
             0xf5 => {
-                let mut addr = self.a as u16;
-                addr |= (self.s as u16) << 7;
-                addr |= (self.z as u16) << 6;
-                addr |= (self.ac as u16) << 4;
-                addr |= (self.p as u16) << 2;
-                addr |= self.cy as u16;
-                self.push(addr);
-
+                // PUSH PSW: push A first (to SP-1), then flags (to SP-2)
+                // Result: flags at SP, A at SP+1
+                let mut flags: u8 = 0x02; // Bit 1 is always set on 8080
+                flags |= (self.s as u8) << 7;
+                flags |= (self.z as u8) << 6;
+                flags |= (self.ac as u8) << 4;
+                flags |= (self.p as u8) << 2;
+                flags |= self.cy as u8;
+                let psw = ((self.a as u16) << 8) | (flags as u16);
+                self.push(psw);
                 self.history.push("PUSH PSW".to_string());
             }
             0xf6 => {
                 let value = self.read(self.pc + 1);
                 self.a |= value;
                 flag!(self, self.a);
+                self.cy = false;
                 self.pc = self.pc.wrapping_add(1);
                 self.history.push(format!("ORI {:#04x}", value));
             }
             0xf7 => {
-                self.call(0x30);
+                self.rst(0x30);
                 self.history.push("RST 6".to_string());
             }
             0xf8 => {
@@ -1551,14 +1955,13 @@ impl Cpu8080 {
                 self.history.push(format!("CPI {:#04x}", value));
             }
             0xff => {
-                self.call(0x38);
+                self.rst(0x38);
                 self.history.push("RST 7".to_string());
             }
         }
         self.pc = self.pc.wrapping_add(1);
     }
 }
-
 
 fn disassembler(pc: usize, rom: &[u8]) -> (String, usize) {
     match rom[pc] {
