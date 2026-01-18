@@ -3,14 +3,29 @@
 use anyhow::Result;
 use macroquad::prelude::*;
 
-const PIXEL_SIZE: i32 = 3;
 // Space Invaders frame buffer is 256 wide x 224 tall (in memory)
 // The monitor is rotated 90 degrees CCW in the cabinet, so:
-// - Frame buffer width (256) becomes screen height
-// - Frame buffer height (224) becomes screen width
-const GAME_WIDTH: i32 = 224 * PIXEL_SIZE; // 672
-const GAME_HEIGHT: i32 = 256 * PIXEL_SIZE; // 768
+// - Frame buffer width (256) becomes screen height (256 pixels)
+// - Frame buffer height (224) becomes screen width (224 pixels)
+const NATIVE_WIDTH: i32 = 224;
+const NATIVE_HEIGHT: i32 = 256;
+const DEFAULT_PIXEL_SIZE: i32 = 3;
+const GAME_WIDTH: i32 = NATIVE_WIDTH * DEFAULT_PIXEL_SIZE; // 672
+const GAME_HEIGHT: i32 = NATIVE_HEIGHT * DEFAULT_PIXEL_SIZE; // 768
 const DEBUG_PANEL_WIDTH: i32 = 400;
+
+/// Calculate pixel size based on current screen dimensions
+fn get_pixel_size() -> f32 {
+    let sw = screen_width();
+    let sh = screen_height();
+
+    // Calculate the maximum pixel size that fits the screen
+    let px_from_width = sw / NATIVE_WIDTH as f32;
+    let px_from_height = sh / NATIVE_HEIGHT as f32;
+
+    // Use the smaller to ensure it fits both dimensions
+    px_from_width.min(px_from_height).max(1.0)
+}
 
 fn window_conf() -> Conf {
     Conf {
@@ -345,6 +360,11 @@ async fn main() -> Result<()> {
             // Render the screen
             clear_background(BLACK);
 
+            // Calculate dynamic pixel size based on screen dimensions
+            let pixel_size = get_pixel_size();
+            let game_width = NATIVE_WIDTH as f32 * pixel_size;
+            let game_height = NATIVE_HEIGHT as f32 * pixel_size;
+
             // VRAM is at 0x2400-0x3FFF (7K bytes = 256x224 pixels, 1 bit per pixel)
             // Memory layout: 32 bytes per row (32*8=256 pixels width), 224 rows (height)
             // The monitor in the cabinet is rotated 90 degrees counter-clockwise
@@ -379,31 +399,31 @@ async fn main() -> Result<()> {
                         let screen_y = 255 - original_x; // 0..255
 
                         // Apply pixel scaling
-                        let x = (screen_x as i32 * PIXEL_SIZE) as f32;
-                        let y = (screen_y as i32 * PIXEL_SIZE) as f32;
+                        let x = screen_x as f32 * pixel_size;
+                        let y = screen_y as f32 * pixel_size;
 
-                        draw_rectangle(x, y, PIXEL_SIZE as f32, PIXEL_SIZE as f32, WHITE);
+                        draw_rectangle(x, y, pixel_size, pixel_size, WHITE);
                     }
                 }
             }
 
             // Only draw debug panel if screen is wide enough (desktop mode)
-            let show_debug_panel = screen_width() > GAME_WIDTH as f32 + 100.0;
+            let show_debug_panel = screen_width() > game_width + 100.0;
 
             if show_debug_panel {
                 // Draw debug panel on the right side
-                let panel_x = GAME_WIDTH as f32;
+                let panel_x = game_width;
                 let panel_bg = Color::new(0.1, 0.1, 0.15, 1.0);
                 draw_rectangle(
                     panel_x,
                     0.0,
                     DEBUG_PANEL_WIDTH as f32,
-                    GAME_HEIGHT as f32,
+                    game_height,
                     panel_bg,
                 );
 
                 // Draw separator line
-                draw_line(panel_x, 0.0, panel_x, GAME_HEIGHT as f32, 2.0, GREEN);
+                draw_line(panel_x, 0.0, panel_x, game_height, 2.0, GREEN);
 
                 let font_size = 16.0;
                 let line_height = 20.0;

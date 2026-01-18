@@ -48,10 +48,25 @@
             margin: 0 8px;
         }
         
-        canvas {
+        .canvas-container {
             border: 3px solid #00ff00;
             box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+            width: fit-content;
+            max-width: calc(100vw - 16px);
+        }
+        
+        canvas {
             outline: none;
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        
+        /* Desktop: allow larger canvas with debug panel */
+        @media (min-width: 801px) {
+            .canvas-container {
+                max-width: none;
+            }
         }
         
         .footer {
@@ -174,7 +189,9 @@
         <span>[R] Reset</span>
     </div>
     
-    <canvas id="glcanvas" tabindex="1" width="1072" height="768"></canvas>
+    <div class="canvas-container">
+        <canvas id="glcanvas" tabindex="1" width="1072" height="768"></canvas>
+    </div>
     
     <!-- Mobile touch controls -->
     <div class="touch-controls">
@@ -197,6 +214,30 @@
 
     <script src="js/mq_js_bundle.js"></script>
     <script>
+        // Set canvas size based on screen width - hide debug panel on mobile
+        (function() {
+            const gameCanvas = document.getElementById('glcanvas');
+            const NATIVE_WIDTH = 224;  // Game native resolution
+            const NATIVE_HEIGHT = 256;
+            const ASPECT_RATIO = NATIVE_HEIGHT / NATIVE_WIDTH; // ~1.143
+            const DEBUG_PANEL_WIDTH = 400;
+            
+            if (window.innerWidth <= 800) {
+                // Mobile: scale canvas to fit viewport
+                const availableWidth = window.innerWidth - 16; // Account for padding/borders
+                const canvasWidth = Math.floor(availableWidth);
+                const canvasHeight = Math.floor(canvasWidth * ASPECT_RATIO);
+                
+                gameCanvas.width = canvasWidth;
+                gameCanvas.height = canvasHeight;
+            } else {
+                // Desktop: game + debug panel at 3x scale
+                const PIXEL_SIZE = 3;
+                gameCanvas.width = (NATIVE_WIDTH * PIXEL_SIZE) + DEBUG_PANEL_WIDTH;
+                gameCanvas.height = NATIVE_HEIGHT * PIXEL_SIZE;
+            }
+        })();
+        
         load("intel-8080-emu.wasm");
         
         // Mobile touch controls - simulate keyboard events
